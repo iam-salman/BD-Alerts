@@ -1,0 +1,85 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Registered operators, technicians, and admin users",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["Admin", "Manager", "FSE", "Operator", "Viewer", "Operations"] },
+        "status": { "type": "string", "enum": ["Active", "Inactive", "Pending"] },
+        "allowedPages": { "type": "array", "items": { "type": "string" } },
+        "invitedAt": { "type": "string", "format": "date-time" },
+        "preferences": { "type": "object" }
+      },
+      "required": ["email", "role"]
+    },
+    "BatteryIssue": {
+      "title": "Battery Issue",
+      "description": "Defect logs and issues reported on battery packs",
+      "type": "object",
+      "properties": {
+        "batteryId": { "type": "string" },
+        "manufacturerSrNo": { "type": "string" },
+        "iotId": { "type": "string" },
+        "issueType": { "type": "string" },
+        "mainDescription": { "type": "string" },
+        "subDescription": { "type": "string" },
+        "status": { "type": "string" },
+        "complaintId": { "type": "string" },
+        "zone": { "type": "string" },
+        "fseComments": { "type": "string" },
+        "fseVisitDate": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "history": { "type": "array" }
+      },
+      "required": ["batteryId", "status"]
+    },
+    "DriverAlert": {
+      "title": "Driver Alert",
+      "description": "Alerts raised for drivers or stations",
+      "type": "object",
+      "properties": {
+        "batteryId": { "type": "string" },
+        "driverName": { "type": "string" },
+        "driverPhone": { "type": "string" },
+        "alertType": { "type": "string" },
+        "stationId": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["alertType", "status"]
+    },
+    "ZoneConfig": {
+      "title": "Zone Configuration",
+      "description": "Geographical zones and city grouping settings",
+      "type": "object",
+      "properties": {
+        "zoneName": { "type": "string" },
+        "cityGroup": { "type": "string" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["zoneName"]
+    }
+  },
+  "firestore": {
+    "users": {
+      "entity": "UserProfile",
+      "description": "User profiles and permissions collection"
+    },
+    "battery_issues": {
+      "entity": "BatteryIssue",
+      "description": "Battery issue tickets and maintenance logs"
+    },
+    "driver_alerts": {
+      "entity": "DriverAlert",
+      "description": "Operational and driver alerts collection"
+    },
+    "zones": {
+      "entity": "ZoneConfig",
+      "description": "Operational zones and groupings"
+    }
+  }
+}

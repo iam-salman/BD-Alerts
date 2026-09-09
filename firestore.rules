@@ -1,0 +1,80 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function currentUserEmail() {
+      return request.auth.token.email != null ? request.auth.token.email.lower() : '';
+    }
+
+    function isMasterAdmin() {
+      return isSignedIn() && currentUserEmail() == 'ahmed.evolt@gmail.com';
+    }
+
+    function hasUserDoc() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(currentUserEmail()));
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(currentUserEmail())).data;
+    }
+
+    function isAdmin() {
+      return isMasterAdmin() || (hasUserDoc() && getUserData().role == 'Admin');
+    }
+
+    function isOperations() {
+      return isAdmin() || (hasUserDoc() && getUserData().role == 'Operations');
+    }
+
+    function isAuthorizedUser() {
+      return isMasterAdmin() || hasUserDoc();
+    }
+
+    // User management collection
+    match /users/{userEmail} {
+      // Users can read their own profile, Admins and Operations can read all profiles
+      allow read: if isSignedIn() && (currentUserEmail() == userEmail.lower() || isAdmin() || isOperations());
+      // Only Admins (and master admin) can create, update, or delete users and permissions
+      allow write: if isAdmin();
+    }
+
+    // Battery issues and maintenance logs
+    match /battery_issues/{issueId} {
+      allow read: if isAuthorizedUser();
+      allow write: if isAuthorizedUser();
+    }
+
+    // Driver alerts and notifications
+    match /driver_alerts/{alertId} {
+      allow read: if isAuthorizedUser();
+      allow write: if isAuthorizedUser();
+    }
+
+    // Operational zones and station grouping
+    match /zones/{zoneId} {
+      allow read: if isAuthorizedUser();
+      allow write: if isAdmin();
+    }
+
+    // Daily inventory records
+    match /daily_inventory/{invId} {
+      allow read: if isAuthorizedUser();
+      allow write: if isAuthorizedUser();
+    }
+
+    // Ghost batteries tracking
+    match /ghost_batteries/{ghostId} {
+      allow read: if isAuthorizedUser();
+      allow write: if isAuthorizedUser();
+    }
+
+    // Fallback rule: restrict any other collections to authorized EVOLT users only
+    match /{document=**} {
+      allow read, write: if isAuthorizedUser();
+    }
+  }
+}

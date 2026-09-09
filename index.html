@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BD Alerts</title>
+    <meta name="description" content="Battery Dost Operations & Alerts Platform with Battery Issues Monitoring">
+    <meta property="og:title" content="BD Alerts">
+    <meta property="og:description" content="Battery Dost Operations & Alerts Platform with Battery Issues Monitoring">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#4f46e5">
+    <link rel="icon" type="image/svg+xml" href="/logo.svg">
+    <link rel="apple-touch-icon" href="/logo.svg">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Quicksand:wght@500;600;700&display=swap" rel="stylesheet" crossorigin="anonymous">
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['"Plus Jakarta Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+              heading: ['"Outfit"', 'sans-serif'],
+              button: ['"Quicksand"', 'sans-serif'],
+              mono: ['"Plus Jakarta Sans"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+            },
+            colors: {
+              dark: {
+                bg: '#09090b', // Zinc 950
+                surface: '#18181b', // Zinc 900
+                border: '#27272a' // Zinc 800
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+        :root {
+            --font-outfit: 'Outfit', sans-serif;
+            --font-jakarta: 'Plus Jakarta Sans', sans-serif;
+            --font-quicksand: 'Quicksand', sans-serif;
+        }
+        body {
+            font-family: var(--font-jakarta);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        h1, h2, h3, h4, .font-heading {
+            font-family: var(--font-outfit);
+        }
+        button, .font-button {
+            font-family: var(--font-quicksand);
+        }
+        .font-jakarta {
+            font-family: var(--font-jakarta);
+        }
+        .font-outfit {
+            font-family: var(--font-outfit);
+        }
+
+        /* --- Global Scrollbar Hiding --- */
+        /* Hide scrollbar for Chrome, Safari and Opera */
+        *::-webkit-scrollbar {
+          display: none;
+        }
+
+        /* Hide scrollbar for IE, Edge and Firefox */
+        * {
+          -ms-overflow-style: none;  /* IE and Edge */
+          scrollbar-width: none;  /* Firefox */
+        }
+
+        /* --- Initial Loader Styles --- */
+        #initial-loader {
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background-color: #F8F9FB;
+            transition: opacity 0.4s ease-out;
+        }
+        
+        @media (prefers-color-scheme: dark) {
+            #initial-loader {
+                background-color: #09090b;
+            }
+            .loader-text {
+                color: #ffffff !important;
+            }
+        }
+
+        .loader-spinner {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: conic-gradient(#0000 10%, #4f46e5);
+            -webkit-mask: radial-gradient(farthest-side,#0000 calc(100% - 9px),#000 0);
+            mask: radial-gradient(farthest-side,#0000 calc(100% - 9px),#000 0);
+            animation: spinner-spin 1s infinite linear;
+        }
+
+        .loader-text {
+            margin-top: 24px;
+            font-family: 'Outfit', sans-serif;
+            font-size: 16px;
+            font-weight: 700;
+            color: #18181b;
+            letter-spacing: 0.15em;
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        @keyframes spinner-spin {
+            to { transform: rotate(1turn); }
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "recharts": "https://esm.sh/recharts@^3.6.0",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "@heroicons/react/24/outline": "https://esm.sh/@heroicons/react@2.0.18/24/outline",
+    "@heroicons/react/24/solid": "https://esm.sh/@heroicons/react@2.0.18/24/solid",
+    "@heroicons/react/": "https://esm.sh/@heroicons/react@^2.2.0/"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body class="bg-[#F8F9FB] text-[#1A1C1E] dark:bg-dark-bg dark:text-zinc-50 selection:bg-indigo-500/30">
+    <!-- Initial Loader (Overlay) -->
+    <div id="initial-loader">
+        <div class="loader-spinner"></div>
+        <div class="loader-text">BD OPS</div>
+    </div>
+
+    <!-- App Root -->
+    <div id="root"></div>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>

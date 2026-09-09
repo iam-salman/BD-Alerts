@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="indigoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5" />
+      <stop offset="100%" stop-color="#312e81" />
+    </linearGradient>
+    <linearGradient id="emeraldGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#047857" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="512" height="512" rx="128" fill="#09090b" />
+  
+  <!-- Outer Glow Accent Ring -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="none" stroke="url(#indigoGrad)" stroke-width="8" opacity="0.3" />
+
+  <!-- Inner Pattern / Tech Grid Motif -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#1f2937" stroke-dasharray="8 12" stroke-width="2" />
+
+  <!-- Battery Container (Slight rotation to make it feel operational / dynamic) -->
+  <g transform="translate(256, 256) rotate(-15) translate(-256, -256)">
+    <!-- Battery Outer Shell -->
+    <rect x="186" y="136" width="140" height="240" rx="24" fill="none" stroke="url(#indigoGrad)" stroke-width="16" filter="url(#glow)" />
+    <!-- Battery Terminal Tip -->
+    <rect x="226" y="104" width="60" height="32" rx="8" fill="url(#indigoGrad)" />
+    
+    <!-- Energy Level (Low State Swap Symbol) -->
+    <!-- First Battery Bar (Low energy or charging level) -->
+    <rect x="206" y="300" width="100" height="50" rx="8" fill="url(#emeraldGrad)" />
+    <!-- Second Battery Bar -->
+    <rect x="206" y="238" width="100" height="50" rx="8" fill="url(#emeraldGrad)" opacity="0.75" />
+    
+    <!-- Lightning Bolt Icon Centered -->
+    <path d="M266 170 L226 240 L260 240 L246 300 L286 230 L252 230 Z" fill="#ebf8ff" filter="url(#glow)" opacity="0.95" />
+  </g>
+
+  <!-- Circular Swapping Arrows Orbiting -->
+  <!-- Top Right Arrow -->
+  <path d="M 370,120 A 180,180 0 0,1 430,280 L 450,250 M 430,280 L 396,266" fill="none" stroke="#10b981" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" />
+  <!-- Bottom Left Arrow -->
+  <path d="M 142,392 A 180,180 0 0,1 82,232 L 62,262 M 82,232 L 116,246" fill="none" stroke="#4f46e5" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
