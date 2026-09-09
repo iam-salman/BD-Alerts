@@ -381,10 +381,11 @@ const GeofenceAlertsPage: React.FC = () => {
     importGridData.forEach(row => {
       // Find index of Battery ID and Last Swapped in case user pasted with headers or shifted columns
       // But we assume the standard grid layout provided in IMPORT_HEADERS
-      if (!row[0] || row[0].trim() === '' || row[0].toLowerCase().includes('battery id')) return;
+      const col0 = String(row[0] || '').trim();
+      if (!col0 || col0.toLowerCase().includes('battery id')) return;
       
-      const batteryId = row[0].trim();
-      const lastSwap = row[10] ? row[10].trim() : '';
+      const batteryId = col0;
+      const lastSwap = row[10] != null ? String(row[10]).trim() : '';
       
       if (batteryId && lastSwap && lastSwap.toLowerCase() !== 'n/a' && !lastSwap.toLowerCase().includes('last swapped')) {
         newMap.set(batteryId, lastSwap);

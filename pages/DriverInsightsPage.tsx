@@ -232,7 +232,8 @@ const DriverInsightsPage: React.FC = () => {
       };
 
       manualGridData.forEach((row) => {
-        if (!row[0] || row[0].trim() === '' || row[0] === 'Swap ID') return;
+        const col0 = String(row[0] || '').trim();
+        if (!col0 || col0 === 'Swap ID') return;
         
         const timestamp = parseDate(row[1]);
         if (timestamp) {

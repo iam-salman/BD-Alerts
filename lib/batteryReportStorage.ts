@@ -29,30 +29,72 @@ export const BATTERY_REPORT_HEADERS = [
   "IOT_ID"
 ];
 
-const parseDateToMs = (dateStr?: string | number): number => {
-  if (!dateStr || dateStr === 'N/A' || dateStr === '--') return 0;
-  if (typeof dateStr === 'number') {
-    return dateStr > 100000000000 ? dateStr : dateStr * 1000;
+export const parseDateToMs = (dateVal?: string | number): number => {
+  if (dateVal === null || dateVal === undefined) return 0;
+  if (typeof dateVal === 'number') {
+    if (isNaN(dateVal) || dateVal <= 0) return 0;
+    // Excel serial date code (e.g. 25569 to 100000, roughly 1970 to 2070)
+    if (dateVal >= 25569 && dateVal < 100000) {
+      return Math.round((dateVal - 25569) * 86400 * 1000);
+    }
+    // Unix timestamp (if in seconds, convert to ms)
+    return dateVal > 1e11 ? dateVal : dateVal * 1000;
   }
-  const str = String(dateStr).trim();
+
+  const str = String(dateVal).trim();
   if (!str) return 0;
-
-  // Check DD-MM-YYYY or DD/MM/YYYY with optional time
-  const ddmmyyyyMatch = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
-  if (ddmmyyyyMatch) {
-    const [_, d, m, y, h, min, s] = ddmmyyyyMatch;
-    const isoStr = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}T${(h || '00').padStart(2, '0')}:${(min || '00').padStart(2, '0')}:${(s || '00').padStart(2, '0')}`;
-    const ts = new Date(isoStr).getTime();
-    if (!isNaN(ts)) return ts;
+  const lower = str.toLowerCase();
+  if (["n/a", "na", "--", "-", "none", "null", "undefined", "0", "never", "unknown"].includes(lower)) {
+    return 0;
   }
 
-  // Check YYYY-MM-DD
-  const yyyymmddMatch = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
-  if (yyyymmddMatch) {
-    const [_, y, m, d, h, min, s] = yyyymmddMatch;
-    const isoStr = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}T${(h || '00').padStart(2, '0')}:${(min || '00').padStart(2, '0')}:${(s || '00').padStart(2, '0')}`;
-    const ts = new Date(isoStr).getTime();
-    if (!isNaN(ts)) return ts;
+  // Pure numeric string (e.g. "1712345678" or Excel "46235.6369")
+  if (/^\d+(\.\d+)?$/.test(str)) {
+    const num = parseFloat(str);
+    if (!isNaN(num) && num > 0) {
+      if (num >= 25569 && num < 100000) {
+        return Math.round((num - 25569) * 86400 * 1000);
+      }
+      return num > 1e11 ? num : num * 1000;
+    }
+  }
+
+  // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY with optional time & optional AM/PM
+  // Examples: "01/08/2026 03:17:16 PM", "25-08-2026 15:30:00", "02/08/2026 04:31:50 PM", "24/05/2024"
+  const ddmmyyyy = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?(?:\s*(am|pm))?)?$/i);
+  if (ddmmyyyy) {
+    const [_, d, m, y, hStr, minStr, secStr, ampm] = ddmmyyyy;
+    let hour = hStr ? parseInt(hStr, 10) : 0;
+    const min = minStr ? parseInt(minStr, 10) : 0;
+    const sec = secStr ? parseInt(secStr, 10) : 0;
+
+    if (ampm) {
+      const isPM = ampm.toLowerCase() === "pm";
+      if (isPM && hour < 12) hour += 12;
+      if (!isPM && hour === 12) hour = 0;
+    }
+
+    const date = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10), hour, min, sec);
+    if (!isNaN(date.getTime())) return date.getTime();
+  }
+
+  // YYYY-MM-DD or YYYY/MM/DD with optional time & optional AM/PM
+  // Examples: "2026-08-01 15:17:16", "2026-08-01T15:17:16.000Z", "2026-08-01 03:17:16 PM"
+  const yyyymmdd = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T\s]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?(?:\s*(am|pm))?)?/i);
+  if (yyyymmdd) {
+    const [_, y, m, d, hStr, minStr, secStr, ampm] = yyyymmdd;
+    let hour = hStr ? parseInt(hStr, 10) : 0;
+    const min = minStr ? parseInt(minStr, 10) : 0;
+    const sec = secStr ? parseInt(secStr, 10) : 0;
+
+    if (ampm) {
+      const isPM = ampm.toLowerCase() === "pm";
+      if (isPM && hour < 12) hour += 12;
+      if (!isPM && hour === 12) hour = 0;
+    }
+
+    const date = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10), hour, min, sec);
+    if (!isNaN(date.getTime())) return date.getTime();
   }
 
   const parsed = new Date(str).getTime();
@@ -72,10 +114,46 @@ const normalizeHeader = (h: any): string => {
 };
 
 /**
+ * Parses SoC from raw cell string.
+ * "N/A", "NA", "--", "", etc. evaluate to 0% as per specifications.
+ * 0% stays 0% (never falls back to 100%).
+ */
+export const parseSocValue = (val: any): number => {
+  if (val === null || val === undefined) return 0;
+  const str = String(val).trim().toUpperCase();
+  if (
+    str === '' ||
+    str === 'N/A' ||
+    str === 'NA' ||
+    str === '--' ||
+    str === '-' ||
+    str === 'NULL' ||
+    str === 'UNDEFINED' ||
+    str === 'NONE'
+  ) {
+    return 0;
+  }
+  const cleaned = str.replace(/%/g, '').trim();
+  const num = parseFloat(cleaned);
+  if (isNaN(num)) return 0;
+  return Math.min(100, Math.max(0, Math.round(num * 10) / 10));
+};
+
+export const parseSohValue = (val: any): number => {
+  if (val === null || val === undefined) return 100;
+  const str = String(val).trim().toUpperCase();
+  if (str === '' || str === 'N/A' || str === 'NA' || str === '--') return 100;
+  const cleaned = str.replace(/%/g, '').trim();
+  const num = parseFloat(cleaned);
+  if (isNaN(num)) return 100;
+  return Math.min(100, Math.max(0, Math.round(num * 10) / 10));
+};
+
+/**
  * Smart parser for a 2D matrix of strings into KazamBattery records.
  * Identifies header row by looking for key headers or defaults to standard indices.
  */
-export const parseBatteryReportGrid = (grid: string[][]): KazamBattery[] => {
+export const parseBatteryReportGrid = (grid: any[][]): KazamBattery[] => {
   if (!grid || grid.length === 0) return [];
 
   let headerRowIdx = -1;
@@ -88,8 +166,9 @@ export const parseBatteryReportGrid = (grid: string[][]): KazamBattery[] => {
     const hasBatId = normRow.some(h => h.includes('batteryid') || h.includes('batid') || h === 'battery' || h === 'id');
     const hasSoc = normRow.some(h => h === 'soc' || h.includes('stateofcharge'));
     const hasStatus = normRow.some(h => h.includes('status'));
+    const hasSwap = normRow.some(h => h.includes('swap'));
 
-    if (hasBatId || (hasSoc && hasStatus)) {
+    if (hasBatId || (hasSoc && hasStatus) || hasSwap) {
       headerRowIdx = r;
       normRow.forEach((norm, cIdx) => {
         if (norm.includes('batteryid') || norm.includes('batid') || (norm === 'id' && !colMap.batteryId)) colMap.batteryId = cIdx;
@@ -102,8 +181,8 @@ export const parseBatteryReportGrid = (grid: string[][]): KazamBattery[] => {
         else if (norm.includes('stationname') || norm.includes('dealername')) colMap.stationName = cIdx;
         else if (norm.includes('drivername')) colMap.driverName = cIdx;
         else if (norm.includes('drivermobile') || norm.includes('driverphone') || norm.includes('phone') || norm.includes('mobile')) colMap.driverMobile = cIdx;
-        else if (norm.includes('lastswap') || norm.includes('swapdate') || norm.includes('lastswapped') || norm.includes('swappedon')) colMap.lastSwap = cIdx;
-        else if (norm.includes('totalswaps') || norm.includes('swaps')) colMap.totalSwaps = cIdx;
+        else if (norm.includes('totalswap') || norm === 'swaps' || norm === 'totalswaps' || norm.includes('freeswap')) colMap.totalSwaps = cIdx;
+        else if (norm.includes('lastswap') || norm.includes('swapdate') || norm.includes('lastswapped') || norm.includes('swappedon') || norm.includes('swap') || norm.includes('swapped')) colMap.lastSwap = cIdx;
         else if (norm.includes('chargecycles') || norm === 'cycles') colMap.chargeCycles = cIdx;
         else if (norm === 'latitude' || norm === 'lat') colMap.lat = cIdx;
         else if (norm === 'longitude' || norm === 'long' || norm === 'lng') colMap.lng = cIdx;
@@ -119,11 +198,16 @@ export const parseBatteryReportGrid = (grid: string[][]): KazamBattery[] => {
     }
   }
 
-  const getCol = (row: string[], key: string, defaultIdx: number): string => {
+  const getCol = (row: any[], key: string, defaultIdx: number): string => {
     if (colMap[key] !== undefined && colMap[key] >= 0 && colMap[key] < row.length) {
-      return (row[colMap[key]] || '').trim();
+      const val = row[colMap[key]];
+      return val !== null && val !== undefined ? String(val).trim() : '';
     }
-    return (row[defaultIdx] || '').trim();
+    if (defaultIdx >= 0 && defaultIdx < row.length) {
+      const val = row[defaultIdx];
+      return val !== null && val !== undefined ? String(val).trim() : '';
+    }
+    return '';
   };
 
   const startRow = headerRowIdx >= 0 ? headerRowIdx + 1 : 0;
@@ -151,8 +235,25 @@ export const parseBatteryReportGrid = (grid: string[][]): KazamBattery[] => {
     const rawStationName = getCol(row, 'stationName', 7);
     const stationName = rawStationName === 'N/A' || rawStationName === '--' ? '' : rawStationName;
 
-    const lastSwapStr = getCol(row, 'lastSwap', 10);
-    const lastSwapMs = parseDateToMs(lastSwapStr);
+    let lastSwapStr = getCol(row, 'lastSwap', 10);
+    let lastSwapMs = parseDateToMs(lastSwapStr);
+
+    // Fallback: If lastSwapMs wasn't identified from the mapped column or default, check other columns for date strings
+    if (!lastSwapMs) {
+      for (let c = 0; c < row.length; c++) {
+        if (c === colMap.batteryId || c === colMap.make || c === colMap.model || c === colMap.driverName) continue;
+        const rawCell = row[c];
+        if (rawCell === null || rawCell === undefined) continue;
+        const cell = String(rawCell).trim();
+        if (cell.length >= 8 && (cell.includes('/') || cell.includes('-') || cell.includes(':'))) {
+          const testMs = parseDateToMs(cell);
+          if (testMs >= 1577836800000 && testMs <= 2051222400000) {
+            lastSwapMs = testMs;
+            break;
+          }
+        }
+      }
+    }
 
     const lastUpdatedStr = colMap.lastUpdated !== undefined ? getCol(row, 'lastUpdated', -1) : '';
     const lastUpdatedMs = lastUpdatedStr ? parseDateToMs(lastUpdatedStr) : undefined;
@@ -174,17 +275,19 @@ export const parseBatteryReportGrid = (grid: string[][]): KazamBattery[] => {
         phone: driverMobile || ""
       } : undefined,
       last_swap_on: lastSwapMs || undefined,
-      last_updated_on: lastUpdatedMs,
-      cycles: parseInt(getCol(row, 'chargeCycles', 12)) || parseInt(row[11]) || 0,
-      charge_cycles: parseInt(getCol(row, 'chargeCycles', 12)) || 0,
+      batteryHistory: lastSwapMs ? { timestamp: lastSwapMs } : undefined,
+      last_updated_on: lastUpdatedMs || (lastSwapMs ? lastSwapMs : Date.now()),
+      cycles: parseInt(getCol(row, 'chargeCycles', 12), 10) || (row[11] != null ? parseInt(String(row[11]), 10) : 0) || 0,
+      charge_cycles: parseInt(getCol(row, 'chargeCycles', 12), 10) || 0,
+      total_swaps: parseInt(getCol(row, 'totalSwaps', 11), 10) || 0,
       location: {
         coordinates: [
           parseFloat(getCol(row, 'lng', 14)) || 76.809,
           parseFloat(getCol(row, 'lat', 13)) || 30.677
         ]
       },
-      soh: parseFloat(getCol(row, 'soh', 15)) || 100,
-      soc: parseFloat(getCol(row, 'soc', 16)) || 100,
+      soh: parseSohValue(getCol(row, 'soh', 15)),
+      soc: parseSocValue(getCol(row, 'soc', 16)),
       voltage: parseFloat(getCol(row, 'voltage', 17)) || 52.0,
       temperature: parseFloat(getCol(row, 'temp', 18)) || 40,
       bms_id: getCol(row, 'bmsId', 19),
@@ -204,15 +307,7 @@ export const parseBatteryReportGrid = (grid: string[][]): KazamBattery[] => {
  */
 export const getStoredBatteries = (): KazamBattery[] => {
   try {
-    const cached = localStorage.getItem(BATTERIES_CACHE_KEY);
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed as KazamBattery[];
-      }
-    }
-
-    // Fallback: Check if grid cache is present and parse it
+    // If raw grid is cached, always prioritize fresh parsing with the latest parser logic
     const gridStr = localStorage.getItem(BATTERY_GRID_CACHE_KEY) || localStorage.getItem(INGESTION_GRID_CACHE_KEY);
     if (gridStr) {
       const grid = JSON.parse(gridStr);
@@ -222,6 +317,24 @@ export const getStoredBatteries = (): KazamBattery[] => {
           localStorage.setItem(BATTERIES_CACHE_KEY, JSON.stringify(parsedBats));
           return parsedBats;
         }
+      }
+    }
+
+    const cached = localStorage.getItem(BATTERIES_CACHE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // Ensure every battery has last_swap_on and batteryHistory properly populated
+        const normalized = parsed.map((b: any) => {
+          const rawSwap = b.batteryHistory?.timestamp || b.last_swap_on || b.last_swap_date || b.last_swap || b.lastSwapped;
+          const swapMs = rawSwap ? parseDateToMs(rawSwap) : undefined;
+          return {
+            ...b,
+            last_swap_on: swapMs || b.last_swap_on || undefined,
+            batteryHistory: swapMs ? { timestamp: swapMs } : b.batteryHistory
+          };
+        });
+        return normalized as KazamBattery[];
       }
     }
   } catch (e) {

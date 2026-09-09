@@ -219,6 +219,10 @@ export interface BatteryIssue {
   isOnlineAtRaise?: boolean;
   removalRecommendation?: string;
   swapAlertSocThreshold?: number;
+  socAtOccurrence?: number | null;
+  isUserDecided?: boolean;
+  prioritySource?: string;
+  priority?: string;
 }
 
 export interface RepairLog {

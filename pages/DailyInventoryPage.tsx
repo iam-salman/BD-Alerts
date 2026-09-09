@@ -42,6 +42,7 @@ import {
 import { User } from "firebase/auth";
 import { useBatteryData } from '@/hooks/useBatteryData';
 import { Station, KazamBattery } from '@/types';
+import { parseDateToMs, parseSocValue, parseSohValue } from '@/lib/batteryReportStorage';
 import CustomSelect from '@/components/CustomSelect';
 import SortableHeader from '@/components/SortableHeader';
 import PaginationFooter from '@/components/PaginationFooter';
@@ -183,32 +184,37 @@ const isValidDriverId = (id?: string, name?: string): boolean => {
   return true;
 };
 
-const parsePastedBatteries = (grid: string[][]): KazamBattery[] => {
+const parsePastedBatteries = (grid: any[][]): KazamBattery[] => {
   const list: KazamBattery[] = [];
   grid.forEach((row) => {
-    const batteryId = row[0]?.trim();
+    if (!row || !Array.isArray(row)) return;
+    const getCell = (idx: number): string => {
+      const val = row[idx];
+      return val != null ? String(val).trim() : "";
+    };
+    const batteryId = getCell(0);
     if (!batteryId) return; // Skip empty rows
 
-    const solution = row[1]?.trim() || "swapping";
-    const make = row[2]?.trim() || "Unknown";
-    const model = row[3]?.trim() || "Unknown";
-    const statusStr = row[4]?.trim() || "Available";
-    const stationId = row[5]?.trim() || "";
-    const driverId = row[6]?.trim() || "";
-    const stationName = row[7]?.trim() || "";
-    const driverName = row[8]?.trim() || "";
-    const driverMobile = row[9]?.trim() || "";
-    const lastSwapped = row[10]?.trim() || "";
-    const totalSwaps = parseInt(row[11]?.trim() || "0", 10) || 0;
-    const chargeCycles = parseInt(row[12]?.trim() || "0", 10) || 0;
-    const lat = parseFloat(row[13]?.trim() || "0") || 0;
-    const lng = parseFloat(row[14]?.trim() || "0") || 0;
-    const soh = parseFloat(row[15]?.trim() || "100") || 100;
-    const soc = parseFloat(row[16]?.trim() || "100") || 100;
-    const voltage = parseFloat(row[17]?.trim() || "0") || 0;
-    const temp = parseFloat(row[18]?.trim() || "0") || 0;
-    const bmsId = row[19]?.trim() || "";
-    const iotId = row[20]?.trim() || "";
+    const solution = getCell(1) || "swapping";
+    const make = getCell(2) || "Unknown";
+    const model = getCell(3) || "Unknown";
+    const statusStr = getCell(4) || "Available";
+    const stationId = getCell(5);
+    const driverId = getCell(6);
+    const stationName = getCell(7);
+    const driverName = getCell(8);
+    const driverMobile = getCell(9);
+    const lastSwapped = getCell(10);
+    const totalSwaps = parseInt(getCell(11) || "0", 10) || 0;
+    const chargeCycles = parseInt(getCell(12) || "0", 10) || 0;
+    const lat = parseFloat(getCell(13) || "0") || 0;
+    const lng = parseFloat(getCell(14) || "0") || 0;
+    const soh = parseSohValue(row[15]);
+    const soc = parseSocValue(row[16]);
+    const voltage = parseFloat(getCell(17) || "0") || 0;
+    const temp = parseFloat(getCell(18) || "0") || 0;
+    const bmsId = getCell(19);
+    const iotId = getCell(20);
 
     let statusNum = 0;
     if (statusStr.toLowerCase() === "assigned") statusNum = 2;
@@ -220,7 +226,7 @@ const parsePastedBatteries = (grid: string[][]): KazamBattery[] => {
     const cleanDriverName = validDriver ? (driverName || "Unknown") : undefined;
     const cleanDriverPhone = validDriver ? (driverMobile || "--") : undefined;
 
-    const lastSwapTs = lastSwapped ? (new Date(lastSwapped).getTime() || 0) : 0;
+    const lastSwapTs = lastSwapped ? parseDateToMs(lastSwapped) : 0;
 
     list.push({
       _id: batteryId,
@@ -236,7 +242,8 @@ const parsePastedBatteries = (grid: string[][]): KazamBattery[] => {
       charge_cycles: chargeCycles,
       voltage: voltage,
       temperature: temp,
-      last_swap_on: lastSwapTs,
+      last_swap_on: lastSwapTs || undefined,
+      batteryHistory: lastSwapTs ? { timestamp: lastSwapTs } : undefined,
       total_swaps: totalSwaps,
       odometer: totalSwaps * 15,
       dealer_name: stationName,

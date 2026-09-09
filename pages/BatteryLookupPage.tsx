@@ -35,7 +35,8 @@ import {
   getStoredBatteries, 
   saveBatteryReport, 
   subscribeToBatteryReport, 
-  parseBatteryReportGrid 
+  parseBatteryReportGrid,
+  parseDateToMs
 } from '../lib/batteryReportStorage';
 import SortableHeader from '../components/SortableHeader';
 import PaginationFooter from '../components/PaginationFooter';
@@ -53,20 +54,6 @@ interface ExtendedBattery extends KazamBattery {
   ticketOccurrence?: number;
 }
 
-const parseDateToMs = (dateStr?: string): number => {
-  if (!dateStr || dateStr.trim() === '' || dateStr === 'N/A') return 0;
-  const str = dateStr.trim();
-  const ddmmyyyyMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(.*))?$/);
-  if (ddmmyyyyMatch) {
-    const [_, d, m, y, timePart] = ddmmyyyyMatch;
-    const formatted = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}${timePart ? ' ' + timePart : ''}`;
-    const ts = new Date(formatted).getTime();
-    if (!isNaN(ts)) return ts;
-  }
-  const ts = new Date(str).getTime();
-  return isNaN(ts) ? 0 : ts;
-};
-
 const parsePastedBatteryRows = (grid: string[][]): KazamBattery[] => {
   return parseBatteryReportGrid(grid);
 };
@@ -83,9 +70,12 @@ const parseBatteryDate = (input: string | number | undefined): Date | null => {
   return null;
 };
 
-const parseSwapDate = (input: number | undefined): Date | null => {
-  if (!input || input === 0) return null;
-  return new Date(input > 1e11 ? input : input * 1000);
+const parseSwapDate = (input: any): Date | null => {
+  if (!input || input === 0 || input === "0" || input === "--" || input === "N/A" || input === "never") return null;
+  if (input instanceof Date) return isNaN(input.getTime()) ? null : input;
+  const ms = parseDateToMs(input);
+  if (ms && ms > 0) return new Date(ms);
+  return null;
 };
 
 const formatDateForExport = (date: Date): string => {
@@ -248,7 +238,7 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
   const [maxSoc, setMaxSoc] = useState(100);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
-  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' | 'none' }>({ key: 'lastUpdateDate', direction: 'desc' });
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' | 'none' }>({ key: 'last_swap_on', direction: 'desc' });
   const [isDownloading, setIsDownloading] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -277,9 +267,14 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
         try {
           const buffer = evt.target?.result;
           if (!buffer) return;
-          const workbook = XLSX.read(buffer, { type: 'array' });
+          const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
           const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-          const rows: string[][] = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: "" });
+          const rawRows: any[][] = XLSX.utils.sheet_to_json(firstSheet, { header: 1, raw: false, defval: "" });
+          const rows: string[][] = (rawRows || []).map(row =>
+            Array.isArray(row)
+              ? row.map(cell => (cell !== null && cell !== undefined ? String(cell).trim() : ""))
+              : []
+          );
           const parsedBatteries = parseBatteryReportGrid(rows);
           if (parsedBatteries.length > 0) {
             saveBatteryReport(parsedBatteries, rows);
@@ -353,8 +348,8 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
     { key: 'voltage', label: 'Voltage' },
     { key: 'latestIssue.issueType', label: 'Latest Issue' },
     { key: 'displayLocation', label: 'Location' },
-    { key: 'lastUpdateDate', label: 'Last Updated' },
-    { key: 'last_swap_on', label: 'Last Swap' }
+    { key: 'latestIssue.removalFactor', label: 'Removal Factor' },
+    { key: 'last_swap_on', label: 'Last Swap Date' }
   ];
 
   const openShareModal = () => {
@@ -515,23 +510,14 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
   const [issueDescription, setIssueDescription] = useState("");
   const [markAsError, setMarkAsError] = useState(false);
   const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
-  const [socAtOccurrence, setSocAtOccurrence] = useState<number>(100);
-  const [manualRemovalFactor, setManualRemovalFactor] = useState<string>("100%");
+  const [socAtOccurrence, setSocAtOccurrence] = useState<number>(0);
+  const [manualRemovalFactor, setManualRemovalFactor] = useState<string>("AUTO");
 
   const getRemovalRecommendation = useCallback((
     issueType: string,
-    isOnline: boolean,
-    socVal: number
+    socVal: number = 0
   ) => {
-    if (!isOnline) {
-      return {
-        percent: null,
-        message: "Battery is Offline. Operator must decide removal manually.",
-        isAuto: false
-      };
-    }
-
-    const normalizedType = String(issueType).trim().toLowerCase();
+    const normalizedType = String(issueType || '').trim().toLowerCase();
     
     const issues100 = [
       'buzzer beeping',
@@ -547,6 +533,7 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
     if (issues100.includes(normalizedType)) {
       return {
         percent: 100,
+        level: 'Critical',
         message: "100% Critical Issue - Recommended to remove from network instantly.",
         isAuto: true
       };
@@ -557,40 +544,70 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
       'uv issue observed again'
     ];
 
+    const soc = typeof socVal === "number" && !isNaN(socVal) ? socVal : 0;
+
     if (UV_issues.includes(normalizedType)) {
-      const soc = typeof socVal === "number" ? socVal : 0;
       if (soc > 50) {
         return {
           percent: 100,
-          message: `100% Removal recommended - SoC at occurrence is ${soc}% (> 50%).`,
+          level: 'Critical',
+          message: `100% Removal recommended - UV issue at high SoC (${soc}% > 50%).`,
           isAuto: true
         };
       } else if (soc >= 25 && soc <= 50) {
         return {
           percent: 80,
-          message: `80% Removal recommended - SoC at occurrence is ${soc}% (25% to 50%).`,
+          level: 'High',
+          message: `80% Removal recommended - UV issue at moderate SoC (${soc}%: 25% to 50%).`,
           isAuto: true
         };
       } else if (soc >= 15 && soc < 25) {
         return {
           percent: 50,
-          message: `50% Removal recommended - SoC at occurrence is ${soc}% (15% to 25%).`,
+          level: 'Medium',
+          message: `50% Removal recommended - UV issue at low SoC (${soc}%: 15% to 24%).`,
           isAuto: true
         };
       } else {
         return {
           percent: 20,
-          message: `20% Removal recommended - SoC at occurrence is ${soc}% (< 15%).`,
+          level: 'Low',
+          message: `20% Priority - Deep discharge / Low SoC (${soc}% < 15%). Immediate swap & charge.`,
           isAuto: true
         };
       }
     }
 
-    return {
-      percent: null,
-      message: "Standard issue type. Removal check is optional.",
-      isAuto: false
-    };
+    // Priority determined on the basis of SoC for general issues
+    if (soc === 0) {
+      return {
+        percent: 100,
+        level: 'Critical',
+        message: `Critical Priority (100%) - Battery SoC is 0%. Immediate attention required.`,
+        isAuto: true
+      };
+    } else if (soc <= 20) {
+      return {
+        percent: 80,
+        level: 'High',
+        message: `High Priority (80%) - Low SoC (${soc}% ≤ 20%). Breached safe threshold.`,
+        isAuto: true
+      };
+    } else if (soc <= 35) {
+      return {
+        percent: 50,
+        level: 'Medium',
+        message: `Medium Priority (50%) - SoC is ${soc}%. Monitor closely.`,
+        isAuto: true
+      };
+    } else {
+      return {
+        percent: 20,
+        level: 'Low',
+        message: `Low Priority (20%) - Healthy SoC (${soc}%). Routine inspection.`,
+        isAuto: true
+      };
+    }
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -604,7 +621,50 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
       };
 
       // 2. Fetch batteries strictly from local storage (no Firebase for battery data)
-      const storedBats = getStoredBatteries();
+      let storedBats = getStoredBatteries();
+
+      // Fallback: If any assigned battery is missing last_swap_on, check cached driver data
+      try {
+        const driversCache = localStorage.getItem("bd_ops_drivers_cache_v3");
+        if (driversCache) {
+          const drivers = JSON.parse(driversCache);
+          if (Array.isArray(drivers) && drivers.length > 0) {
+            const driverSwapMap = new Map<string, number>();
+            const batToDriverSwapMap = new Map<string, number>();
+            for (const d of drivers) {
+              const swapMs = d.latest_swap?.last_swap_date || (d.last_swap_date ? parseDateToMs(d.last_swap_date) : 0);
+              if (swapMs && swapMs > 0) {
+                if (d.driver_id) driverSwapMap.set(String(d.driver_id).toLowerCase().trim(), swapMs);
+                if (d.assignedBattery1) batToDriverSwapMap.set(String(d.assignedBattery1).toUpperCase().trim(), swapMs);
+                if (d.assignedBattery2) batToDriverSwapMap.set(String(d.assignedBattery2).toUpperCase().trim(), swapMs);
+                if (d.batteries && Array.isArray(d.batteries)) {
+                  d.batteries.forEach((b: any) => {
+                    const bId = typeof b === 'string' ? b : b?.id || b?._id;
+                    if (bId) batToDriverSwapMap.set(String(bId).toUpperCase().trim(), swapMs);
+                  });
+                }
+              }
+            }
+
+            storedBats = storedBats.map(b => {
+              if (b.last_swap_on && b.last_swap_on > 0) return b;
+              const bId = String(b.id || b._id || '').toUpperCase().trim();
+              const dId = String(b.driver_id || '').toLowerCase().trim();
+              const foundSwap = batToDriverSwapMap.get(bId) || (dId ? driverSwapMap.get(dId) : undefined);
+              if (foundSwap) {
+                return {
+                  ...b,
+                  last_swap_on: foundSwap,
+                  batteryHistory: { timestamp: foundSwap }
+                };
+              }
+              return b;
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("Could not cross-reference driver swap dates:", e);
+      }
 
       let activeIssues: BatteryIssue[] = [];
       try {
@@ -670,11 +730,13 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
           return (str.includes(',') || str.includes('"') || str.includes('\n')) ? `"${str.replace(/"/g, '""')}"` : str;
         };
 
+        const expSwapDate = parseSwapDate(bat.batteryHistory?.timestamp || bat.last_swap_on || (bat as any).last_swap_date || (bat as any).last_swap || (bat as any).lastSwapped);
+
         return [
           escape(bat.id), escape(bat.make), escape(bat.model), escape(bat.derivedStatus),
           escape(bat.dealer_id), escape(bat.driver_id), escape(bat.dealer_name),
           escape(bat.driverData?.name), escape(bat.driverData?.phone),
-          escape((bat.batteryHistory?.timestamp || (bat.last_swap_on ? bat.last_swap_on * 1000 : 0)) ? formatDateForExport(new Date(bat.batteryHistory?.timestamp || (bat.last_swap_on ? bat.last_swap_on * 1000 : 0))) : ''),
+          escape(expSwapDate ? formatDateForExport(expSwapDate) : ''),
           escape(bat.total_swaps), escape(bat.charge_cycles || bat.cycles),
           escape(bat.location?.coordinates[1]), escape(bat.location?.coordinates[0]),
           escape(bat.soh), escape(bat.soc), escape(bat.voltage), escape(bat.temperature),
@@ -731,11 +793,11 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
 
     const bat = allBatteries.find(b => b.id === batteryId);
     if (bat) {
-      setSocAtOccurrence(typeof bat.soc === 'number' ? bat.soc : 100);
+      setSocAtOccurrence(typeof bat.soc === 'number' ? bat.soc : 0);
     } else {
-      setSocAtOccurrence(100);
+      setSocAtOccurrence(0);
     }
-    setManualRemovalFactor("100%");
+    setManualRemovalFactor("AUTO");
 
     setIsIssueModalOpen(true);
   };
@@ -748,16 +810,27 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
     const battery = allBatteries.find(
       (b) => b.id === selectedBatteryIdForIssue,
     );
-    const enrichedBattery = battery ? getEnrichedBattery(battery, Date.now()) : null;
-    const isOnline = enrichedBattery ? enrichedBattery.isOnlineInstant : false;
 
-    const recResult = getRemovalRecommendation(mainIssueDescription, isOnline, socAtOccurrence);
-    const removalFactor = isOnline 
-      ? recResult.percent 
-      : (manualRemovalFactor === "Keep (0%)" ? 0 : parseInt(manualRemovalFactor));
-    const removalRecommendation = isOnline 
-      ? (recResult.percent !== null ? `${recResult.percent}%` : "N/A") 
-      : manualRemovalFactor;
+    const recResult = getRemovalRecommendation(mainIssueDescription, socAtOccurrence);
+    
+    let removalFactor: number;
+    let removalRecommendation: string;
+    let isUserDecided = false;
+
+    if (manualRemovalFactor && manualRemovalFactor !== "AUTO") {
+      isUserDecided = true;
+      if (manualRemovalFactor === "Keep (0%)") {
+        removalFactor = 0;
+        removalRecommendation = "Keep (0%)";
+      } else {
+        const parsed = parseInt(manualRemovalFactor);
+        removalFactor = isNaN(parsed) ? (recResult.percent || 0) : parsed;
+        removalRecommendation = manualRemovalFactor;
+      }
+    } else {
+      removalFactor = recResult.percent || 0;
+      removalRecommendation = `${recResult.percent}% (${recResult.level})`;
+    }
 
     try {
       await addDoc(collection(db, "battery_issues"), {
@@ -778,10 +851,12 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
           ? "With Driver"
           : (battery ? (battery.dealer_name || "Station") : "Station"),
         stationId: battery?.dealer_id || "Unknown",
-        removalFactor: removalFactor !== undefined ? removalFactor : null,
-        removalRecommendation: removalRecommendation || null,
-        isOnlineAtRaise: isOnline,
-        socAtOccurrence: isOnline ? socAtOccurrence : null,
+        priority: recResult.level,
+        removalFactor: removalFactor,
+        removalRecommendation: removalRecommendation,
+        isUserDecided: isUserDecided,
+        prioritySource: isUserDecided ? "User Decided" : `SoC: ${socAtOccurrence}%`,
+        socAtOccurrence: socAtOccurrence,
       });
       if (markAsError) {
         await updateBatteryStatus(selectedBatteryIdForIssue, 3);
@@ -1058,36 +1133,35 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
 
       <div className="bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-100 dark:border-zinc-800 shadow-sm overflow-hidden flex flex-col">
         <div className="overflow-auto max-h-[70vh] min-h-[300px] scrollbar-thin scrollbar-thumb-zinc-200 dark:scrollbar-thumb-zinc-800 pb-32">
-          <table className="w-full text-left min-w-[1200px] table-fixed">
+          <table className="w-full text-left min-w-[1080px] table-fixed">
             <thead className="bg-zinc-50/95 dark:bg-zinc-950/95 border-b border-zinc-100 dark:border-zinc-800 backdrop-blur-sm sticky top-0 z-10">
               <tr>
-                <SortableHeader label="Battery ID" sortKey="id" currentSort={sortConfig as any} onSort={handleSort} className="w-44" />
-                <SortableHeader label="IoT ID" sortKey="iot_id" currentSort={sortConfig as any} onSort={handleSort} className="w-56" />
-                <SortableHeader label="Status" sortKey="derivedStatus" currentSort={sortConfig as any} onSort={handleSort} className="w-32" />
-                <SortableHeader label="SoC" sortKey="soc" currentSort={sortConfig as any} onSort={handleSort} className="w-24" />
-                <SortableHeader label="Voltage" sortKey="voltage" currentSort={sortConfig as any} onSort={handleSort} className="w-24" />
-                <SortableHeader label="Latest Issue" sortKey="latestIssue.issueType" currentSort={sortConfig as any} onSort={handleSort} className="w-64" />
-                <SortableHeader label="Location" sortKey="displayLocation" currentSort={sortConfig as any} onSort={handleSort} className="w-48" />
-                <SortableHeader label="Removal Factor" sortKey="latestIssue.removalFactor" currentSort={sortConfig as any} onSort={handleSort} className="w-40" />
-                <SortableHeader label="Last Updated" sortKey="lastUpdateDate" currentSort={sortConfig as any} onSort={handleSort} className="w-52" />
-                <SortableHeader label="Last Swap Date" sortKey="last_swap_on" currentSort={sortConfig as any} onSort={handleSort} className="w-52" />
-                <th className="px-5 py-4 text-[11px] font-bold uppercase tracking-widest text-zinc-500 whitespace-nowrap text-center w-24">Map</th>
-                <SortableHeader label="Action" sortKey="ticketOccurrence" currentSort={sortConfig as any} onSort={handleSort} className="w-28" />
+                <SortableHeader label="Battery ID" sortKey="id" currentSort={sortConfig as any} onSort={handleSort} className="w-40" />
+                <SortableHeader label="IoT ID" sortKey="iot_id" currentSort={sortConfig as any} onSort={handleSort} className="w-48" />
+                <SortableHeader label="Status" sortKey="derivedStatus" currentSort={sortConfig as any} onSort={handleSort} className="w-28" />
+                <SortableHeader label="SoC" sortKey="soc" currentSort={sortConfig as any} onSort={handleSort} className="w-20" />
+                <SortableHeader label="Voltage" sortKey="voltage" currentSort={sortConfig as any} onSort={handleSort} className="w-20" />
+                <SortableHeader label="Latest Issue" sortKey="latestIssue.issueType" currentSort={sortConfig as any} onSort={handleSort} className="w-56" />
+                <SortableHeader label="Location" sortKey="displayLocation" currentSort={sortConfig as any} onSort={handleSort} className="w-44" />
+                <SortableHeader label="Removal Factor" sortKey="latestIssue.removalFactor" currentSort={sortConfig as any} onSort={handleSort} className="w-36" />
+                <SortableHeader label="Last Swap Date" sortKey="last_swap_on" currentSort={sortConfig as any} onSort={handleSort} className="w-44" />
+                <th className="px-3 py-4 text-[11px] font-bold uppercase tracking-widest text-zinc-500 whitespace-nowrap text-center w-16">Map</th>
+                <SortableHeader label="Action" sortKey="ticketOccurrence" currentSort={sortConfig as any} onSort={handleSort} className="w-24 text-center" />
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800/50">
               {loading && allBatteries.length === 0 ? (
                 Array.from({length:5}).map((_,i) => (
                   <tr key={i} className="animate-pulse">
-                    <td className="px-4 py-6" colSpan={12}><div className="h-4 bg-zinc-100 dark:bg-zinc-800 rounded w-full"></div></td>
+                    <td className="px-4 py-6" colSpan={11}><div className="h-4 bg-zinc-100 dark:bg-zinc-800 rounded w-full"></div></td>
                   </tr>
                 ))
               ) : filteredData.length === 0 ? (
-                <tr><td colSpan={12} className="py-20 text-center text-zinc-400 font-bold">No assets found matching filters</td></tr>
+                <tr><td colSpan={11} className="py-20 text-center text-zinc-400 font-bold">No assets found matching filters</td></tr>
               ) : (
                 paginatedData.map(bat => {
-                  const updateStr = bat.lastUpdateDate ? `${bat.lastUpdateDate.toLocaleDateString('en-GB')} ${bat.lastUpdateDate.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit' })}` : '';
-                  const swapDate = parseSwapDate(bat.batteryHistory?.timestamp || bat.last_swap_on);
+                  const rawSwap = bat.batteryHistory?.timestamp || bat.last_swap_on || (bat as any).last_swap_date || (bat as any).last_swap || (bat as any).lastSwapped;
+                  const swapDate = parseSwapDate(rawSwap);
                   const swapStr = swapDate ? `${swapDate.toLocaleDateString('en-GB')} ${swapDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : '--';
                   const occurrenceCount = bat.ticketOccurrence || 0;
 
@@ -1188,20 +1262,18 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
                       <td className="px-4 py-4">
                         {(() => {
                           let rf = bat.latestIssue?.removalFactor;
-                          let isOnlineAtRaise = bat.latestIssue?.isOnlineAtRaise;
                           let rec = bat.latestIssue?.removalRecommendation;
+                          const socVal = bat.latestIssue?.socAtOccurrence !== undefined && bat.latestIssue?.socAtOccurrence !== null 
+                            ? bat.latestIssue.socAtOccurrence 
+                            : (typeof bat.soc === 'number' ? bat.soc : 0);
                           
                           if (bat.latestIssue && (rf === undefined || rf === null)) {
-                            const isOnlineVal = bat.isOnlineInstant;
-                            const socVal = typeof bat.soc === 'number' ? bat.soc : 100;
                             const fallback = getRemovalRecommendation(
                               bat.latestIssue.mainDescription || bat.latestIssue.issueType || "Other",
-                              isOnlineVal,
                               socVal
                             );
                             rf = fallback.percent !== null ? fallback.percent : 0;
                             rec = fallback.percent !== null ? `${fallback.percent}%` : "0% (Optional)";
-                            isOnlineAtRaise = isOnlineVal;
                           }
                           
                           if (rf === undefined || rf === null) {
@@ -1213,7 +1285,9 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
                           }
 
                           const percentNum = typeof rf === 'number' ? rf : parseInt(rf);
-                          const lvl = isOnlineAtRaise ? "Auto Rec" : "User Decided";
+                          const lvl = bat.latestIssue?.isUserDecided 
+                            ? "User Decided" 
+                            : (bat.latestIssue?.prioritySource || (socVal !== null && socVal !== undefined ? `SoC: ${socVal}%` : "Based on SoC"));
                           
                           let badgeStyle = "bg-zinc-100 text-zinc-700 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:border-zinc-700";
                           if (percentNum === 100) {
@@ -1240,16 +1314,15 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
                           );
                         })()}
                       </td>
-                      <td className="px-4 py-4">
-                        {updateStr ? (
-                          <span className={`px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap ${bat.isOnlineInstant ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400'}`}>
-                            {updateStr}
+                      <td className="px-4 py-4 whitespace-nowrap">
+                        {swapStr !== '--' ? (
+                          <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300 font-mono">
+                            {swapStr}
                           </span>
                         ) : (
                           <span className="text-zinc-400 dark:text-zinc-600 text-xs font-semibold pl-2">--</span>
                         )}
                       </td>
-                      <td className="px-4 py-4 text-xs font-bold text-zinc-600 whitespace-nowrap">{swapStr}</td>
                       <td className="px-4 py-4 text-center">
                         <button
                           onClick={(e) => {
@@ -1371,26 +1444,29 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
 
       {/* Raise Issue Modal */}
       {isIssueModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-zinc-950/80 backdrop-blur-md p-4">
-          <div className="bg-white dark:bg-zinc-900 rounded-[2.5rem] w-full max-w-md p-8 shadow-2xl animate-in fade-in zoom-in-95 border border-zinc-200 dark:border-zinc-800">
-            <div className="flex justify-between items-start mb-8">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-zinc-950/80 backdrop-blur-md p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-zinc-900 rounded-3xl w-full max-w-lg max-h-[92vh] sm:max-h-[88vh] flex flex-col shadow-2xl border border-zinc-200 dark:border-zinc-800 animate-in fade-in zoom-in-95 duration-200 overflow-hidden my-auto">
+            {/* Modal Header */}
+            <div className="flex justify-between items-center px-6 py-4 border-b border-zinc-100 dark:border-zinc-800 shrink-0 bg-zinc-50/50 dark:bg-zinc-950/40">
               <div>
-                <h3 className="text-xl font-bold font-heading text-zinc-900 dark:text-white">
+                <h3 className="text-lg font-black text-zinc-900 dark:text-white tracking-tight">
                   Raise Battery Issue
                 </h3>
-                <p className="text-sm font-bold text-zinc-500">
-                  Asset ID: <span className="text-red-600">{selectedBatteryIdForIssue}</span>
+                <p className="text-xs font-bold text-zinc-500 mt-0.5">
+                  Asset ID: <span className="font-mono text-red-600 dark:text-red-400 font-black">{selectedBatteryIdForIssue}</span>
                 </p>
               </div>
               <button
                 onClick={() => setIsIssueModalOpen(false)}
-                className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full"
+                className="p-2 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-full transition-colors text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                title="Close"
               >
-                <XMarkIcon className="w-6 h-6 text-zinc-400" />
+                <XMarkIcon className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="space-y-6 mb-8">
+            {/* Modal Scrollable Body */}
+            <div className="space-y-5 px-6 py-5 flex-1 overflow-y-auto">
               <div>
                 <label className="text-xs font-bold uppercase text-zinc-500 mb-2 block">
                   Issue
@@ -1432,110 +1508,125 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
 
               {(() => {
                 const selectedBattery = allBatteries.find(b => b.id === selectedBatteryIdForIssue);
-                const isOnlineSelected = selectedBattery ? getEnrichedBattery(selectedBattery, fetchTime).isOnlineInstant : false;
+                const rec = getRemovalRecommendation(mainIssueDescription, socAtOccurrence);
+                const isAuto = !manualRemovalFactor || manualRemovalFactor === "AUTO";
+                const activeLvl = isAuto ? `${rec.percent}%` : manualRemovalFactor;
+
+                const getBadgeBg = (pct: number | string) => {
+                  const p = typeof pct === 'number' ? pct : parseInt(pct);
+                  if (p === 100) return 'bg-red-500 text-white';
+                  if (p === 80) return 'bg-amber-500 text-white';
+                  if (p === 50) return 'bg-yellow-500 text-zinc-900';
+                  if (p === 20) return 'bg-blue-500 text-white';
+                  return 'bg-emerald-500 text-white';
+                };
+
                 return (
                   <>
-                    {isOnlineSelected && (mainIssueDescription === 'UV issue' || mainIssueDescription === 'UV issue observed again') && (
-                      <div className="p-4 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100/50 dark:border-indigo-800/50 rounded-2xl space-y-2">
-                        <label className="text-xs font-bold uppercase text-indigo-700 dark:text-indigo-400 block">
+                    <div className="p-4 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-2xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold uppercase text-zinc-700 dark:text-zinc-300 block">
                           SoC at which issue occurred (%)
                         </label>
-                        <div className="flex items-center gap-3">
-                          <input 
-                            type="number" 
-                            min="0" 
-                            max="100" 
-                            value={socAtOccurrence} 
-                            onChange={(e) => {
-                              const val = parseInt(e.target.value);
-                              setSocAtOccurrence(isNaN(val) ? 0 : Math.min(100, Math.max(0, val)));
-                            }}
-                            className="w-24 px-3 py-1.5 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-855 rounded-lg text-sm font-bold text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-indigo-500 outline-none"
-                          />
-                          <span className="text-[11px] font-bold text-zinc-400">
-                            Current SoC: <span className="text-zinc-700 dark:text-zinc-351">{selectedBattery?.soc}%</span>
-                          </span>
-                        </div>
+                        <span className="text-[11px] font-semibold text-zinc-500">
+                          Current SoC: <span className="font-bold text-zinc-900 dark:text-zinc-100">{selectedBattery?.soc ?? 0}%</span>
+                        </span>
                       </div>
-                    )}
+                      <input 
+                        type="number" 
+                        min="0" 
+                        max="100" 
+                        value={socAtOccurrence} 
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          setSocAtOccurrence(isNaN(val) ? 0 : Math.min(100, Math.max(0, val)));
+                        }}
+                        className="w-full px-3 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl text-sm font-bold text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder="Enter SoC (0-100)"
+                      />
+                    </div>
 
                     {mainIssueDescription !== 'Select Issue' && (
-                      <div className="p-4 rounded-2xl border bg-zinc-50 dark:bg-zinc-950 border-zinc-150 dark:border-zinc-800">
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">
-                            Removal Decision Factor
+                      <div className="p-4 rounded-2xl border bg-zinc-50 dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">
+                            Removal & Priority Decision
                           </span>
-                          <span className={`px-2 py-0.5 text-[9px] font-black uppercase rounded-lg border ${isOnlineSelected ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-400 dark:border-emerald-800' : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800'}`}>
-                            {isOnlineSelected ? 'Battery Online' : 'Battery Offline'}
+                          <span className={`px-2 py-0.5 text-[9px] font-black uppercase rounded-lg border ${
+                            isAuto 
+                              ? 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400 dark:border-indigo-800' 
+                              : 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800'
+                          }`}>
+                            {isAuto ? 'Based on SoC' : 'User Decided'}
                           </span>
                         </div>
 
-                        {isOnlineSelected ? (
-                          (() => {
-                            const rec = getRemovalRecommendation(mainIssueDescription, true, socAtOccurrence);
-                            const displayPercent = rec.percent !== null ? `${rec.percent}%` : 'N/A';
-                            const badgeBg = rec.percent === 100 
-                              ? 'bg-red-500 text-white' 
-                              : rec.percent === 80 
-                                ? 'bg-amber-500 text-white' 
-                                : rec.percent === 50 
-                                  ? 'bg-yellow-500 text-zinc-900 dark:text-zinc-900' 
-                                  : rec.percent === 20
-                                    ? 'bg-blue-500 text-white'
-                                    : 'bg-zinc-400 text-white';
+                        <div className="flex items-center gap-3">
+                          <span className={`text-sm font-black px-2.5 py-1 rounded-xl shrink-0 ${getBadgeBg(activeLvl)}`}>
+                            {activeLvl}
+                          </span>
+                          <p className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                            {isAuto ? rec.message : `Priority manually designated as ${activeLvl} by operator.`}
+                          </p>
+                        </div>
 
-                            return (
-                              <div className="space-y-2">
-                                <div className="flex items-center gap-3">
-                                  <span className={`text-base font-black px-2.5 py-1 rounded-xl shrink-0 ${badgeBg}`}>
-                                    {displayPercent}
-                                  </span>
-                                  <span className="text-xs font-bold text-zinc-800 dark:text-zinc-200">
-                                    Network Removal Priority
-                                  </span>
-                                </div>
-                                <p className="text-[11px] font-bold text-zinc-500 leading-relaxed">
-                                  {rec.message}
-                                </p>
-                              </div>
-                            );
-                          })()
-                        ) : (
-                          <div className="space-y-3">
-                            <p className="text-xs font-bold text-zinc-500">
-                              Offline battery. Please decide network removal priority manually:
-                            </p>
-                            <div className="flex gap-1.5 flex-wrap">
-                              {['Keep (0%)', '20%', '50%', '80%', '100%'].map((lvl) => (
-                                <button
-                                  key={lvl}
-                                  type="button"
-                                  onClick={() => setManualRemovalFactor(lvl)}
-                                  className={`flex-1 min-w-[60px] py-2 text-[10px] font-black rounded-lg border transition-all ${
-                                    manualRemovalFactor === lvl
-                                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100 dark:shadow-none'
-                                      : 'bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'
-                                  }`}
-                                >
-                                  {lvl}
-                                </button>
-                              ))}
-                            </div>
+                        <div className="pt-2 border-t border-zinc-200 dark:border-zinc-800">
+                          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">
+                            Priority Choice (Manual Override or Based on SoC):
+                          </p>
+                          <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setManualRemovalFactor('AUTO')}
+                              className={`py-1.5 px-2 text-[10px] font-black rounded-lg border transition-all ${
+                                isAuto
+                                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                                  : 'bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                              }`}
+                            >
+                              Auto (SoC)
+                            </button>
+                            {['Keep (0%)', '20%', '50%', '80%', '100%'].map((lvl) => (
+                              <button
+                                key={lvl}
+                                type="button"
+                                onClick={() => setManualRemovalFactor(lvl)}
+                                className={`py-1.5 px-2 text-[10px] font-black rounded-lg border transition-all ${
+                                  !isAuto && manualRemovalFactor === lvl
+                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                                    : 'bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                                }`}
+                              >
+                                {lvl}
+                              </button>
+                            ))}
                           </div>
-                        )}
+                        </div>
                       </div>
                     )}
                   </>
                 );
               })()}
             </div>
-            <button
-              onClick={handleRaiseIssue}
-              disabled={!mainIssueDescription || mainIssueDescription === "Select Issue" || isSubmittingIssue}
-              className="w-full py-3 rounded-xl bg-red-600 text-white font-bold font-button shadow-lg shadow-red-200 dark:shadow-none hover:bg-red-700 disabled:opacity-50 transition-all"
-            >
-              {isSubmittingIssue ? "Processing..." : "Confirm & Raise"}
-            </button>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-3.5 bg-zinc-50 dark:bg-zinc-950 border-t border-zinc-100 dark:border-zinc-800/80 flex items-center justify-end gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsIssueModalOpen(false)}
+                className="px-4 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 font-bold text-xs text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRaiseIssue}
+                disabled={!mainIssueDescription || mainIssueDescription === "Select Issue" || isSubmittingIssue}
+                className="px-5 py-2 rounded-xl bg-red-600 text-white font-black text-xs shadow-md shadow-red-500/20 hover:bg-red-700 disabled:opacity-50 transition-all active:scale-95"
+              >
+                {isSubmittingIssue ? "Processing..." : "Confirm & Raise"}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1687,14 +1778,14 @@ const BatteryLookupPage: React.FC<{ db: Firestore; role?: UserRole }> = ({ db, r
                                 </td>
                               )}
                               {visibleColumns.includes('displayLocation') && <td className="px-5 py-4 text-xs font-bold text-zinc-600 whitespace-nowrap">{bat.displayLocation}</td>}
-                              {visibleColumns.includes('lastUpdateDate') && (
-                                <td className="px-5 py-4 text-[10px] font-bold text-zinc-500 whitespace-nowrap">
-                                  {bat.lastUpdateDate ? bat.lastUpdateDate.toLocaleString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '--'}
+                              {visibleColumns.includes('latestIssue.removalFactor') && (
+                                <td className="px-5 py-4 text-xs font-bold text-zinc-600 whitespace-nowrap">
+                                  {bat.latestIssue?.removalFactor ? `${bat.latestIssue.removalFactor}` : '--'}
                                 </td>
                               )}
                               {visibleColumns.includes('last_swap_on') && (
                                 <td className="px-5 py-4 text-[10px] font-bold text-zinc-500 whitespace-nowrap">
-                                  {parseSwapDate(bat.batteryHistory?.timestamp || bat.last_swap_on)?.toLocaleString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) || '--'}
+                                  {parseSwapDate(bat.batteryHistory?.timestamp || bat.last_swap_on || (bat as any).last_swap_date || (bat as any).last_swap || (bat as any).lastSwapped)?.toLocaleString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' }) || '--'}
                                 </td>
                               )}
                             </tr>

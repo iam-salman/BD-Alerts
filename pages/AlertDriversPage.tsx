@@ -127,20 +127,25 @@ const ALERTS_HEADERS = [
 ];
 const INITIAL_ALERTS_GRID_SEED = Array.from({ length: 15 }, () => Array(6).fill(""));
 
-const parsePastedAlerts = (grid: string[][]): RawAlert[] => {
+const parsePastedAlerts = (grid: any[][]): RawAlert[] => {
   const alerts: RawAlert[] = [];
   grid.forEach((row) => {
-    const deviceId = row[0]?.trim();
-    const serialNumber = row[1]?.trim();
+    if (!row || !Array.isArray(row)) return;
+    const getCell = (idx: number): string => {
+      const val = row[idx];
+      return val != null ? String(val).trim() : "";
+    };
+    const deviceId = getCell(0);
+    const serialNumber = getCell(1);
     if (!deviceId && !serialNumber) return; // Skip empty rows
 
     alerts.push({
       deviceId: deviceId || "",
       serialNumber: serialNumber || "",
-      ruleName: row[2]?.trim() || "Unknown Alert",
-      startTime: row[3]?.trim() || "",
-      breachValue: row[4]?.trim() || "",
-      endBreachValue: row[5]?.trim() || "",
+      ruleName: getCell(2) || "Unknown Alert",
+      startTime: getCell(3) || "",
+      breachValue: getCell(4) || "",
+      endBreachValue: getCell(5) || "",
     });
   });
   return alerts;
@@ -164,32 +169,37 @@ const isValidDriverId = (id?: string, name?: string): boolean => {
   return true;
 };
 
-const parsePastedBatteries = (grid: string[][]): KazamBattery[] => {
+const parsePastedBatteries = (grid: any[][]): KazamBattery[] => {
   const list: KazamBattery[] = [];
   grid.forEach((row) => {
-    const batteryId = row[0]?.trim();
+    if (!row || !Array.isArray(row)) return;
+    const getCell = (idx: number): string => {
+      const val = row[idx];
+      return val != null ? String(val).trim() : "";
+    };
+    const batteryId = getCell(0);
     if (!batteryId) return; // Skip empty rows
 
-    const solution = row[1]?.trim() || "swapping";
-    const make = row[2]?.trim() || "Unknown";
-    const model = row[3]?.trim() || "Unknown";
-    const statusStr = row[4]?.trim() || "Available";
-    const stationId = row[5]?.trim() || "";
-    const driverId = row[6]?.trim() || "";
-    const stationName = row[7]?.trim() || "";
-    const driverName = row[8]?.trim() || "";
-    const driverMobile = row[9]?.trim() || "";
-    const lastSwapped = row[10]?.trim() || "";
-    const totalSwaps = parseInt(row[11]?.trim() || "0", 10) || 0;
-    const chargeCycles = parseInt(row[12]?.trim() || "0", 10) || 0;
-    const lat = parseFloat(row[13]?.trim() || "0") || 0;
-    const lng = parseFloat(row[14]?.trim() || "0") || 0;
-    const soh = parseFloat(row[15]?.trim() || "100") || 100;
-    const soc = parseFloat(row[16]?.trim() || "100") || 100;
-    const voltage = parseFloat(row[17]?.trim() || "0") || 0;
-    const temp = parseFloat(row[18]?.trim() || "0") || 0;
-    const bmsId = row[19]?.trim() || "";
-    const iotId = row[20]?.trim() || "";
+    const solution = getCell(1) || "swapping";
+    const make = getCell(2) || "Unknown";
+    const model = getCell(3) || "Unknown";
+    const statusStr = getCell(4) || "Available";
+    const stationId = getCell(5);
+    const driverId = getCell(6);
+    const stationName = getCell(7);
+    const driverName = getCell(8);
+    const driverMobile = getCell(9);
+    const lastSwapped = getCell(10);
+    const totalSwaps = parseInt(getCell(11) || "0", 10) || 0;
+    const chargeCycles = parseInt(getCell(12) || "0", 10) || 0;
+    const lat = parseFloat(getCell(13) || "0") || 0;
+    const lng = parseFloat(getCell(14) || "0") || 0;
+    const soh = parseFloat(getCell(15) || "100") || 100;
+    const soc = parseFloat(getCell(16) || "100") || 100;
+    const voltage = parseFloat(getCell(17) || "0") || 0;
+    const temp = parseFloat(getCell(18) || "0") || 0;
+    const bmsId = getCell(19);
+    const iotId = getCell(20);
 
     // Map status string to status code: Available (0), Assigned (2), Error (3)
     let statusNum = 0;
@@ -743,8 +753,8 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
   const [subIssueDescription, setSubIssueDescription] = useState("");
   const [markAsError, setMarkAsError] = useState(false);
   const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
-  const [socAtOccurrence, setSocAtOccurrence] = useState<number>(100);
-  const [manualRemovalFactor, setManualRemovalFactor] = useState<string>("100%");
+  const [socAtOccurrence, setSocAtOccurrence] = useState<number>(0);
+  const [manualRemovalFactor, setManualRemovalFactor] = useState<string>("AUTO");
   const [raiseIssueSocThreshold, setRaiseIssueSocThreshold] = useState<number>(35);
 
   // Proactive Swap Alerts State
@@ -804,18 +814,9 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
 
   const getRemovalRecommendation = useCallback((
     issueType: string,
-    isOnline: boolean,
-    socVal: number
+    socVal: number = 0
   ) => {
-    if (!isOnline) {
-      return {
-        percent: null,
-        message: "Battery is Offline. Operator must decide removal manually.",
-        isAuto: false
-      };
-    }
-
-    const normalizedType = String(issueType).trim().toLowerCase();
+    const normalizedType = String(issueType || '').trim().toLowerCase();
     
     const issues100 = [
       'buzzer beeping',
@@ -831,6 +832,7 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
     if (issues100.includes(normalizedType)) {
       return {
         percent: 100,
+        level: 'Critical',
         message: "100% Critical Issue - Recommended to remove from network instantly.",
         isAuto: true
       };
@@ -841,40 +843,70 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
       'uv issue observed again'
     ];
 
+    const soc = typeof socVal === "number" && !isNaN(socVal) ? socVal : 0;
+
     if (UV_issues.includes(normalizedType)) {
-      const soc = typeof socVal === "number" ? socVal : 0;
       if (soc > 50) {
         return {
           percent: 100,
-          message: `100% Removal recommended - SoC at occurrence is ${soc}% (> 50%).`,
+          level: 'Critical',
+          message: `100% Removal recommended - UV issue at high SoC (${soc}% > 50%).`,
           isAuto: true
         };
       } else if (soc >= 25 && soc <= 50) {
         return {
           percent: 80,
-          message: `80% Removal recommended - SoC at occurrence is ${soc}% (25% to 50%).`,
+          level: 'High',
+          message: `80% Removal recommended - UV issue at moderate SoC (${soc}%: 25% to 50%).`,
           isAuto: true
         };
       } else if (soc >= 15 && soc < 25) {
         return {
           percent: 50,
-          message: `50% Removal recommended - SoC at occurrence is ${soc}% (15% to 25%).`,
+          level: 'Medium',
+          message: `50% Removal recommended - UV issue at low SoC (${soc}%: 15% to 24%).`,
           isAuto: true
         };
       } else {
         return {
           percent: 20,
-          message: `20% Removal recommended - SoC at occurrence is ${soc}% (< 15%).`,
+          level: 'Low',
+          message: `20% Priority - Deep discharge / Low SoC (${soc}% < 15%). Immediate swap & charge.`,
           isAuto: true
         };
       }
     }
 
-    return {
-      percent: null,
-      message: "Standard issue type. Removal check is optional.",
-      isAuto: false
-    };
+    // Priority determined on the basis of SoC for other issues
+    if (soc === 0) {
+      return {
+        percent: 100,
+        level: 'Critical',
+        message: `Critical Priority (100%) - Battery SoC is 0%. Immediate attention required.`,
+        isAuto: true
+      };
+    } else if (soc <= 20) {
+      return {
+        percent: 80,
+        level: 'High',
+        message: `High Priority (80%) - Low SoC (${soc}% ≤ 20%). Breached safe threshold.`,
+        isAuto: true
+      };
+    } else if (soc <= 35) {
+      return {
+        percent: 50,
+        level: 'Medium',
+        message: `Medium Priority (50%) - SoC is ${soc}%. Monitor closely.`,
+        isAuto: true
+      };
+    } else {
+      return {
+        percent: 20,
+        level: 'Low',
+        message: `Low Priority (20%) - Healthy SoC (${soc}%). Routine inspection.`,
+        isAuto: true
+      };
+    }
   }, []);
 
   // History Modal State
@@ -1869,11 +1901,11 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
 
     const bat = allBatteries.find(b => b.id === batteryId);
     if (bat) {
-      setSocAtOccurrence(typeof bat.soc === 'number' ? bat.soc : 100);
+      setSocAtOccurrence(typeof bat.soc === 'number' ? bat.soc : 0);
     } else {
-      setSocAtOccurrence(100);
+      setSocAtOccurrence(0);
     }
-    setManualRemovalFactor("100%");
+    setManualRemovalFactor("AUTO");
     const existingThreshold = batteryThresholdOverrides[batteryId] 
       || activeIssuesMap[batteryId]?.swapAlertSocThreshold 
       || globalSwapSocThreshold 
@@ -1891,15 +1923,27 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
     const battery = allBatteries.find(
       (b) => b.id === selectedBatteryIdForIssue,
     );
-    const isOnlineVal = battery ? isOnline(battery) : false;
 
-    const recResult = getRemovalRecommendation(mainIssueDescription, isOnlineVal, socAtOccurrence);
-    const removalFactor = isOnlineVal 
-      ? recResult.percent 
-      : (manualRemovalFactor === "Keep (0%)" ? 0 : parseInt(manualRemovalFactor));
-    const removalRecommendation = isOnlineVal 
-      ? (recResult.percent !== null ? `${recResult.percent}%` : "N/A") 
-      : manualRemovalFactor;
+    const recResult = getRemovalRecommendation(mainIssueDescription, socAtOccurrence);
+    
+    let removalFactor: number;
+    let removalRecommendation: string;
+    let isUserDecided = false;
+
+    if (manualRemovalFactor && manualRemovalFactor !== "AUTO") {
+      isUserDecided = true;
+      if (manualRemovalFactor === "Keep (0%)") {
+        removalFactor = 0;
+        removalRecommendation = "Keep (0%)";
+      } else {
+        const parsed = parseInt(manualRemovalFactor);
+        removalFactor = isNaN(parsed) ? (recResult.percent || 0) : parsed;
+        removalRecommendation = manualRemovalFactor;
+      }
+    } else {
+      removalFactor = recResult.percent || 0;
+      removalRecommendation = `${recResult.percent}% (${recResult.level})`;
+    }
 
     try {
       await addDoc(collection(db, "battery_issues"), {
@@ -1920,10 +1964,12 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
           ? "With Driver"
           : (battery?.dealer_name || "Not Assigned"),
         stationId: battery?.dealer_id || "Unknown",
-        removalFactor: removalFactor !== undefined ? removalFactor : null,
-        removalRecommendation: removalRecommendation || null,
-        isOnlineAtRaise: isOnlineVal,
-        socAtOccurrence: isOnlineVal ? socAtOccurrence : null,
+        priority: recResult.level,
+        removalFactor: removalFactor,
+        removalRecommendation: removalRecommendation,
+        isUserDecided: isUserDecided,
+        prioritySource: isUserDecided ? "User Decided" : `SoC: ${socAtOccurrence}%`,
+        socAtOccurrence: socAtOccurrence,
         swapAlertSocThreshold: raiseIssueSocThreshold,
       });
 
@@ -2706,22 +2752,21 @@ Stay safe & keep moving!`;
           
           let rf = ticket.removalFactor;
           let rec = ticket.removalRecommendation;
-          let isOnlineAtRaise = ticket.isOnlineAtRaise;
+          let isUserDecided = ticket.isUserDecided;
           
           if (rf === undefined || rf === null) {
-            const isOnlineVal = liveBat ? isOnline(liveBat) : false;
-            const socVal = liveBat && typeof liveBat.soc === "number" ? liveBat.soc : 100;
-            const fallback = getRemovalRecommendation(ticket.mainDescription || ticket.issueType || "Other", isOnlineVal, socVal);
+            const socVal = typeof ticket.socAtOccurrence === "number" ? ticket.socAtOccurrence : (liveBat && typeof liveBat.soc === "number" ? liveBat.soc : 0);
+            const fallback = getRemovalRecommendation(ticket.mainDescription || ticket.issueType || "Other", socVal);
             rf = fallback.percent !== null ? fallback.percent : 0;
-            rec = fallback.percent !== null ? `${fallback.percent}%` : "0% (Optional)";
-            isOnlineAtRaise = isOnlineVal;
+            rec = fallback.percent !== null ? `${fallback.percent}% (${fallback.level})` : "0% (Optional)";
+            isUserDecided = false;
           }
 
           const enrichedTicket = {
             ...ticket,
             removalFactor: rf,
             removalRecommendation: rec,
-            isOnlineAtRaise: isOnlineAtRaise,
+            isUserDecided: isUserDecided,
           };
 
           grouped.set(ticket.batteryId, {
@@ -3848,7 +3893,10 @@ Stay safe & keep moving!`;
                                     }
 
                                     const percentNum = typeof rf === 'number' ? rf : parseInt(rf);
-                                    const lvl = isOnlineAtRaise ? "Auto Rec" : "User Decided";
+                                    const socAtRaise = bat.ticket?.socAtOccurrence;
+                                    const lvl = bat.ticket?.isUserDecided 
+                                      ? "User Decided" 
+                                      : (socAtRaise !== undefined && socAtRaise !== null ? `SoC: ${socAtRaise}%` : "Based on SoC");
                                     
                                     let badgeStyle = "bg-zinc-100 text-zinc-700 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:border-zinc-700";
                                     if (percentNum === 100) {
@@ -3886,10 +3934,8 @@ Stay safe & keep moving!`;
                                   </span>
                                 </td>
                                 <td className="px-6 py-4">
-                                  <span
-                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase ${bat.isOnline ? "bg-emerald-500/10 text-emerald-700" : "bg-rose-500/10 text-rose-700"}`}
-                                  >
-                                    <SignalIcon className="w-3 h-3" />
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700/80">
+                                    <ClockIcon className="w-3 h-3 text-zinc-400" />
                                     {formatDisplayDate(bat.last_updated_on)}
                                   </span>
                                 </td>
@@ -5269,25 +5315,29 @@ Stay safe & keep moving!`;
       )}
 
       {isIssueModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-zinc-950/80 backdrop-blur-md p-4">
-          <div className="bg-white dark:bg-zinc-900 rounded-[2rem] w-full max-w-md p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex justify-between items-start mb-6">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-zinc-950/80 backdrop-blur-md p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-zinc-900 rounded-3xl w-full max-w-lg max-h-[92vh] sm:max-h-[88vh] flex flex-col shadow-2xl border border-zinc-200 dark:border-zinc-800 animate-in fade-in zoom-in-95 duration-200 overflow-hidden my-auto">
+            {/* Modal Header */}
+            <div className="flex justify-between items-center px-6 py-4 border-b border-zinc-100 dark:border-zinc-800 shrink-0 bg-zinc-50/50 dark:bg-zinc-950/40">
               <div>
-                <h3 className="text-xl font-bold font-heading text-zinc-900 dark:text-white">
+                <h3 className="text-lg font-black text-zinc-900 dark:text-white tracking-tight">
                   Raise Issue
                 </h3>
-                <p className="text-sm font-bold text-zinc-500">
-                  Asset: {selectedBatteryIdForIssue}
+                <p className="text-xs font-bold text-zinc-500 mt-0.5">
+                  Asset: <span className="font-mono text-red-600 dark:text-red-400 font-black">{selectedBatteryIdForIssue}</span>
                 </p>
               </div>
               <button
                 onClick={() => setIsIssueModalOpen(false)}
-                className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full"
+                className="p-2 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-full transition-colors text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                title="Close"
               >
-                <XMarkIcon className="w-6 h-6 text-zinc-400" />
+                <XMarkIcon className="w-5 h-5" />
               </button>
             </div>
-            <div className="space-y-6 mb-8">
+
+            {/* Modal Scrollable Body */}
+            <div className="space-y-5 px-6 py-5 flex-1 overflow-y-auto">
               <div>
                 <label className="text-xs font-bold uppercase text-zinc-500 mb-2 block">
                   Issue
@@ -5364,110 +5414,125 @@ Stay safe & keep moving!`;
 
               {(() => {
                 const selectedBattery = allBatteries.find(b => b.id === selectedBatteryIdForIssue);
-                const isOnlineSelected = selectedBattery ? isOnline(selectedBattery) : false;
+                const rec = getRemovalRecommendation(mainIssueDescription, socAtOccurrence);
+                const isAuto = !manualRemovalFactor || manualRemovalFactor === "AUTO";
+                const activeLvl = isAuto ? `${rec.percent}%` : manualRemovalFactor;
+
+                const getBadgeBg = (pct: number | string) => {
+                  const p = typeof pct === 'number' ? pct : parseInt(pct);
+                  if (p === 100) return 'bg-red-500 text-white';
+                  if (p === 80) return 'bg-amber-500 text-white';
+                  if (p === 50) return 'bg-yellow-500 text-zinc-900';
+                  if (p === 20) return 'bg-blue-500 text-white';
+                  return 'bg-emerald-500 text-white';
+                };
+
                 return (
                   <>
-                    {isOnlineSelected && (mainIssueDescription === 'UV issue' || mainIssueDescription === 'UV issue observed again') && (
-                      <div className="p-4 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100/50 dark:border-indigo-800/50 rounded-2xl space-y-2">
-                        <label className="text-xs font-bold uppercase text-indigo-700 dark:text-indigo-400 block">
+                    <div className="p-4 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-2xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold uppercase text-zinc-700 dark:text-zinc-300 block">
                           SoC at which issue occurred (%)
                         </label>
-                        <div className="flex items-center gap-3">
-                          <input 
-                            type="number" 
-                            min="0" 
-                            max="100" 
-                            value={socAtOccurrence} 
-                            onChange={(e) => {
-                              const val = parseInt(e.target.value);
-                              setSocAtOccurrence(isNaN(val) ? 0 : Math.min(100, Math.max(0, val)));
-                            }}
-                            className="w-24 px-3 py-1.5 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-855 rounded-lg text-sm font-bold text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-indigo-500 outline-none"
-                          />
-                          <span className="text-[11px] font-bold text-zinc-400">
-                            Current SoC: <span className="text-zinc-700 dark:text-zinc-351">{selectedBattery?.soc}%</span>
-                          </span>
-                        </div>
+                        <span className="text-[11px] font-semibold text-zinc-500">
+                          Current SoC: <span className="font-bold text-zinc-900 dark:text-zinc-100">{selectedBattery?.soc ?? 0}%</span>
+                        </span>
                       </div>
-                    )}
+                      <input 
+                        type="number" 
+                        min="0" 
+                        max="100" 
+                        value={socAtOccurrence} 
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          setSocAtOccurrence(isNaN(val) ? 0 : Math.min(100, Math.max(0, val)));
+                        }}
+                        className="w-full px-3 py-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl text-sm font-bold text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        placeholder="Enter SoC (0-100)"
+                      />
+                    </div>
 
                     {mainIssueDescription !== 'Select Issue' && (
-                      <div className="p-4 rounded-2xl border bg-zinc-50 dark:bg-zinc-950 border-zinc-150 dark:border-zinc-800">
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">
-                            Removal Decision Factor
+                      <div className="p-4 rounded-2xl border bg-zinc-50 dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black uppercase text-zinc-500 tracking-wider">
+                            Removal & Priority Decision
                           </span>
-                          <span className={`px-2 py-0.5 text-[9px] font-black uppercase rounded-lg border ${isOnlineSelected ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-400 dark:border-emerald-800' : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800'}`}>
-                            {isOnlineSelected ? 'Battery Online' : 'Battery Offline'}
+                          <span className={`px-2 py-0.5 text-[9px] font-black uppercase rounded-lg border ${
+                            isAuto 
+                              ? 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400 dark:border-indigo-800' 
+                              : 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800'
+                          }`}>
+                            {isAuto ? 'Based on SoC' : 'User Decided'}
                           </span>
                         </div>
 
-                        {isOnlineSelected ? (
-                          (() => {
-                            const rec = getRemovalRecommendation(mainIssueDescription, true, socAtOccurrence);
-                            const displayPercent = rec.percent !== null ? `${rec.percent}%` : 'N/A';
-                            const badgeBg = rec.percent === 100 
-                              ? 'bg-red-500 text-white' 
-                              : rec.percent === 80 
-                                ? 'bg-amber-500 text-white' 
-                                : rec.percent === 50 
-                                  ? 'bg-yellow-500 text-zinc-900 dark:text-zinc-900' 
-                                  : rec.percent === 20
-                                    ? 'bg-blue-500 text-white'
-                                    : 'bg-zinc-400 text-white';
+                        <div className="flex items-center gap-3">
+                          <span className={`text-sm font-black px-2.5 py-1 rounded-xl shrink-0 ${getBadgeBg(activeLvl)}`}>
+                            {activeLvl}
+                          </span>
+                          <p className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                            {isAuto ? rec.message : `Priority manually designated as ${activeLvl} by operator.`}
+                          </p>
+                        </div>
 
-                            return (
-                              <div className="space-y-2">
-                                <div className="flex items-center gap-3">
-                                  <span className={`text-base font-black px-2.5 py-1 rounded-xl shrink-0 ${badgeBg}`}>
-                                    {displayPercent}
-                                  </span>
-                                  <span className="text-xs font-bold text-zinc-800 dark:text-zinc-200">
-                                    Network Removal Priority
-                                  </span>
-                                </div>
-                                <p className="text-[11px] font-bold text-zinc-500 leading-relaxed">
-                                  {rec.message}
-                                </p>
-                              </div>
-                            );
-                          })()
-                        ) : (
-                          <div className="space-y-3">
-                            <p className="text-xs font-bold text-zinc-500">
-                              Offline battery. Please decide network removal priority manually:
-                            </p>
-                            <div className="flex gap-1.5 flex-wrap">
-                              {['Keep (0%)', '20%', '50%', '80%', '100%'].map((lvl) => (
-                                <button
-                                  key={lvl}
-                                  type="button"
-                                  onClick={() => setManualRemovalFactor(lvl)}
-                                  className={`flex-1 min-w-[60px] py-2 text-[10px] font-black rounded-lg border transition-all ${
-                                    manualRemovalFactor === lvl
-                                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100 dark:shadow-none'
-                                      : 'bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800'
-                                  }`}
-                                >
-                                  {lvl}
-                                </button>
-                              ))}
-                            </div>
+                        <div className="pt-2 border-t border-zinc-200 dark:border-zinc-800">
+                          <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">
+                            Priority Choice (Manual Override or Based on SoC):
+                          </p>
+                          <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setManualRemovalFactor('AUTO')}
+                              className={`py-1.5 px-2 text-[10px] font-black rounded-lg border transition-all ${
+                                isAuto
+                                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                                  : 'bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                              }`}
+                            >
+                              Auto (SoC)
+                            </button>
+                            {['Keep (0%)', '20%', '50%', '80%', '100%'].map((lvl) => (
+                              <button
+                                key={lvl}
+                                type="button"
+                                onClick={() => setManualRemovalFactor(lvl)}
+                                className={`py-1.5 px-2 text-[10px] font-black rounded-lg border transition-all ${
+                                  !isAuto && manualRemovalFactor === lvl
+                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                                    : 'bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                                }`}
+                              >
+                                {lvl}
+                              </button>
+                            ))}
                           </div>
-                        )}
+                        </div>
                       </div>
                     )}
                   </>
                 );
               })()}
             </div>
-            <button
-              onClick={handleRaiseIssue}
-              disabled={!mainIssueDescription || mainIssueDescription === "Select Issue" || isSubmittingIssue}
-              className="w-full py-3 rounded-xl bg-red-600 text-white font-bold font-button shadow-lg shadow-red-200 dark:shadow-none hover:bg-red-700 disabled:opacity-50 transition-all"
-            >
-              {isSubmittingIssue ? "Processing..." : "Confirm & Raise"}
-            </button>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-3.5 bg-zinc-50 dark:bg-zinc-950 border-t border-zinc-100 dark:border-zinc-800/80 flex items-center justify-end gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsIssueModalOpen(false)}
+                className="px-4 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 font-bold text-xs text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRaiseIssue}
+                disabled={!mainIssueDescription || mainIssueDescription === "Select Issue" || isSubmittingIssue}
+                className="px-5 py-2 rounded-xl bg-red-600 text-white font-black text-xs shadow-md shadow-red-500/20 hover:bg-red-700 disabled:opacity-50 transition-all active:scale-95"
+              >
+                {isSubmittingIssue ? "Processing..." : "Confirm & Raise"}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -33,7 +33,7 @@ import { collection, onSnapshot, query, orderBy, doc, updateDoc, deleteDoc, Fire
 import { BatteryIssue, KazamDriver, KazamBattery, UserRole } from '@/types';
 import CustomSelect from '@/components/CustomSelect';
 import { useBatteryData } from '@/hooks/useBatteryData';
-import { saveBatteryReport, clearStoredBatteries } from '@/lib/batteryReportStorage';
+import { saveBatteryReport, clearStoredBatteries, parseSocValue, parseSohValue } from '@/lib/batteryReportStorage';
 import SortableHeader from '@/components/SortableHeader';
 import CopyButton from '@/components/CopyButton';
 import PaginationFooter from '@/components/PaginationFooter';
@@ -198,29 +198,66 @@ export const isGridPopulated = (grid?: string[][]): boolean => {
 };
 
 export const parseDateToMs = (dateVal?: string | number): number => {
-  if (!dateVal) return 0;
+  if (dateVal === null || dateVal === undefined) return 0;
   if (typeof dateVal === 'number') {
-    return dateVal > 100000000000 ? dateVal : dateVal * 1000;
+    if (isNaN(dateVal) || dateVal <= 0) return 0;
+    if (dateVal >= 25569 && dateVal < 100000) {
+      return Math.round((dateVal - 25569) * 86400 * 1000);
+    }
+    return dateVal > 1e11 ? dateVal : dateVal * 1000;
   }
   const str = String(dateVal).trim();
-  if (!str || str === 'N/A' || str === 'Never' || str === '-' || str === '--') return 0;
-
-  // DD/MM/YYYY or DD-MM-YYYY with optional time (e.g. 24-05-2024 14:30 or 24/05/2024 14:30:00)
-  const ddmmyyyyMatch = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?:\s+(.*))?$/);
-  if (ddmmyyyyMatch) {
-    const [_, d, m, y, timePart] = ddmmyyyyMatch;
-    const formatted = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}${timePart ? ' ' + timePart : ''}`;
-    const ts = new Date(formatted).getTime();
-    if (!isNaN(ts)) return ts;
+  if (!str) return 0;
+  const lower = str.toLowerCase();
+  if (["n/a", "na", "--", "-", "none", "null", "undefined", "0", "never", "unknown"].includes(lower)) {
+    return 0;
   }
 
-  // YYYY-MM-DD or YYYY/MM/DD with optional time
-  const yyyymmddMatch = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\s+(.*))?$/);
-  if (yyyymmddMatch) {
-    const [_, y, m, d, timePart] = yyyymmddMatch;
-    const formatted = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}${timePart ? ' ' + timePart : ''}`;
-    const ts = new Date(formatted).getTime();
-    if (!isNaN(ts)) return ts;
+  // Pure numeric string
+  if (/^\d+(\.\d+)?$/.test(str)) {
+    const num = parseFloat(str);
+    if (!isNaN(num) && num > 0) {
+      if (num >= 25569 && num < 100000) {
+        return Math.round((num - 25569) * 86400 * 1000);
+      }
+      return num > 1e11 ? num : num * 1000;
+    }
+  }
+
+  // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY with optional time & AM/PM
+  const ddmmyyyy = str.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?(?:\s*(am|pm))?)?$/i);
+  if (ddmmyyyy) {
+    const [_, d, m, y, hStr, minStr, secStr, ampm] = ddmmyyyy;
+    let hour = hStr ? parseInt(hStr, 10) : 0;
+    const min = minStr ? parseInt(minStr, 10) : 0;
+    const sec = secStr ? parseInt(secStr, 10) : 0;
+
+    if (ampm) {
+      const isPM = ampm.toLowerCase() === "pm";
+      if (isPM && hour < 12) hour += 12;
+      if (!isPM && hour === 12) hour = 0;
+    }
+
+    const date = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10), hour, min, sec);
+    if (!isNaN(date.getTime())) return date.getTime();
+  }
+
+  // YYYY-MM-DD or YYYY/MM/DD with optional time & AM/PM
+  const yyyymmdd = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T\s]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?(?:\s*(am|pm))?)?/i);
+  if (yyyymmdd) {
+    const [_, y, m, d, hStr, minStr, secStr, ampm] = yyyymmdd;
+    let hour = hStr ? parseInt(hStr, 10) : 0;
+    const min = minStr ? parseInt(minStr, 10) : 0;
+    const sec = secStr ? parseInt(secStr, 10) : 0;
+
+    if (ampm) {
+      const isPM = ampm.toLowerCase() === "pm";
+      if (isPM && hour < 12) hour += 12;
+      if (!isPM && hour === 12) hour = 0;
+    }
+
+    const date = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10), hour, min, sec);
+    if (!isNaN(date.getTime())) return date.getTime();
   }
 
   const ts = new Date(str).getTime();
@@ -336,14 +373,14 @@ const parsePasteData = (
 
       for (let r = 1; r < rawRows.length; r++) {
         const row = rawRows[r];
-        if (!row || row.every(c => !c.trim())) continue;
+        if (!row || row.every(c => c == null || String(c).trim() === "")) continue;
         while (alignedGrid.length <= targetRow) {
           alignedGrid.push(Array(colCount).fill(""));
         }
         for (let c = 0; c < row.length; c++) {
           const targetCol = colMapping[c];
           if (targetCol >= 0 && targetCol < colCount) {
-            alignedGrid[targetRow][targetCol] = row[c].trim();
+            alignedGrid[targetRow][targetCol] = row[c] != null ? String(row[c]).trim() : "";
           }
         }
         targetRow++;
@@ -364,7 +401,7 @@ const parsePasteData = (
     for (let c = 0; c < rawRows[r].length; c++) {
       const targetCol = startCol + c;
       if (targetCol < colCount) {
-        newData[targetRow][targetCol] = rawRows[r][c].trim();
+        newData[targetRow][targetCol] = rawRows[r][c] != null ? String(rawRows[r][c]).trim() : "";
       }
     }
   }
@@ -415,11 +452,13 @@ const parsePastedDriverReport = (grid: string[][]): KazamDriver[] => {
     }
   }
 
-  const getCol = (row: string[], key: string, defaultIdx: number): string => {
+  const getCol = (row: any[], key: string, defaultIdx: number): string => {
     if (colMap[key] !== undefined && colMap[key] >= 0 && colMap[key] < row.length) {
-      return (row[colMap[key]] || '').trim();
+      const val = row[colMap[key]];
+      return val != null ? String(val).trim() : '';
     }
-    return (row[defaultIdx] || '').trim();
+    const defVal = defaultIdx >= 0 && defaultIdx < row.length ? row[defaultIdx] : undefined;
+    return defVal != null ? String(defVal).trim() : '';
   };
 
   const startRow = headerRowIdx >= 0 ? headerRowIdx + 1 : 0;
@@ -472,7 +511,7 @@ const parsePastedDriverReport = (grid: string[][]): KazamDriver[] => {
         name: getCol(row, 'onboardingStationName', 18)
       },
       planData: [{
-        plan_name: (row[12] || "").trim(),
+        plan_name: row[12] != null ? String(row[12]).trim() : "",
         free_swaps: parseInt(row[13]) || 0,
         deposit_amount: parseFloat(row[14]) || 0
       }],
@@ -538,11 +577,13 @@ const parsePastedBatteryReport = (grid: string[][]): KazamBattery[] => {
     }
   }
 
-  const getCol = (row: string[], key: string, defaultIdx: number): string => {
+  const getCol = (row: any[], key: string, defaultIdx: number): string => {
     if (colMap[key] !== undefined && colMap[key] >= 0 && colMap[key] < row.length) {
-      return (row[colMap[key]] || '').trim();
+      const val = row[colMap[key]];
+      return val != null ? String(val).trim() : '';
     }
-    return (row[defaultIdx] || '').trim();
+    const defVal = defaultIdx >= 0 && defaultIdx < row.length ? row[defaultIdx] : undefined;
+    return defVal != null ? String(defVal).trim() : '';
   };
 
   const startRow = headerRowIdx >= 0 ? headerRowIdx + 1 : 0;
@@ -601,8 +642,8 @@ const parsePastedBatteryReport = (grid: string[][]): KazamBattery[] => {
           parseFloat(getCol(row, 'lat', 13)) || 30.677
         ]
       },
-      soh: parseFloat(getCol(row, 'soh', 15)) || 100,
-      soc: parseFloat(getCol(row, 'soc', 16)) || 100,
+      soh: parseSohValue(getCol(row, 'soh', 15)),
+      soc: parseSocValue(getCol(row, 'soc', 16)),
       voltage: parseFloat(getCol(row, 'voltage', 17)) || 52.0,
       temperature: parseFloat(getCol(row, 'temp', 18)) || 40,
       bms_id: getCol(row, 'bmsId', 19),
