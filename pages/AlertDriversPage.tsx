@@ -56,6 +56,7 @@ import {
   ShareIcon,
 } from "@heroicons/react/24/outline";
 import { KazamBattery, BatteryIssue, KazamDriver, ISSUE_TYPES, UserRole, Station, StationGroup } from "../types";
+import { BulkCreateTicketsModal } from "../components/BulkCreateTicketsModal";
 import {
   db,
   auth,
@@ -74,6 +75,7 @@ import {
   writeBatch,
   getAuth,
   Firestore,
+  sanitizeFirestorePayload,
 } from "@/lib/firebase";
 import CustomSelect from "@/components/CustomSelect";
 import { useBatteryData } from "@/hooks/useBatteryData";
@@ -743,6 +745,7 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
     title: "",
   });
   const [exportWithOccurrence, setExportWithOccurrence] = useState(false);
+  const [showBulkCreateTicketsModal, setShowBulkCreateTicketsModal] = useState(false);
   const [activeIssuesMap, setActiveIssuesMap] = useState<
     Record<string, BatteryIssue>
   >({});
@@ -757,13 +760,13 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
   const [manualRemovalFactor, setManualRemovalFactor] = useState<string>("AUTO");
   const [raiseIssueSocThreshold, setRaiseIssueSocThreshold] = useState<number>(35);
 
-  // Proactive Swap Alerts State
-  const [globalSwapSocThreshold, setGlobalSwapSocThreshold] = useState<number>(() => {
+  // Proactive Swap Alerts State - null by default (no threshold chosen unless explicitly set)
+  const [globalSwapSocThreshold, setGlobalSwapSocThreshold] = useState<number | null>(() => {
     try {
       const saved = localStorage.getItem("bd_ops_issue_swap_threshold");
-      if (saved) return Number(saved) || 35;
+      if (saved && !isNaN(Number(saved))) return Number(saved);
     } catch (e) {}
-    return 35;
+    return null;
   });
   const [batteryThresholdOverrides, setBatteryThresholdOverrides] = useState<Record<string, number>>(() => {
     try {
@@ -1220,7 +1223,7 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
             removalFactor: raw.removalFactor,
             removalRecommendation: raw.removalRecommendation,
             isOnlineAtRaise: raw.isOnlineAtRaise,
-            swapAlertSocThreshold: raw.swapAlertSocThreshold !== undefined && raw.swapAlertSocThreshold !== null ? Number(raw.swapAlertSocThreshold) : undefined,
+            swapAlertSocThreshold: (raw.source === 'bulk_creation') ? undefined : (raw.swapAlertSocThreshold !== undefined && raw.swapAlertSocThreshold !== null ? Number(raw.swapAlertSocThreshold) : undefined),
           };
           issues.push(data);
           if (map[data.batteryId]) {
@@ -1762,9 +1765,8 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
       const issue = activeIssuesMap[b.id];
       if (issue) {
         const threshold = batteryThresholdOverrides[b.id] 
-          ?? issue.swapAlertSocThreshold 
-          ?? globalSwapSocThreshold;
-        if (typeof b.soc === "number" && b.soc <= threshold) {
+          ?? (typeof issue.swapAlertSocThreshold === "number" ? issue.swapAlertSocThreshold : (globalSwapSocThreshold ?? undefined));
+        if (threshold !== undefined && typeof b.soc === "number" && b.soc <= threshold) {
           const ruleName = `Swap Alert (SoC ≤ ${threshold}%)`;
           if (b.driver_id && isValidDriverId(b.driver_id, b.driverData?.name)) {
             const ruleKey = `${b.driver_id}_${ruleName}`;
@@ -1946,7 +1948,7 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
     }
 
     try {
-      await addDoc(collection(db, "battery_issues"), {
+      await addDoc(collection(db, "battery_issues"), sanitizeFirestorePayload({
         batteryId: selectedBatteryIdForIssue,
         mainDescription: mainIssueDescription,
         subDescription: subIssueDescription || issueDescription,
@@ -1970,20 +1972,14 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
         isUserDecided: isUserDecided,
         prioritySource: isUserDecided ? "User Decided" : `SoC: ${socAtOccurrence}%`,
         socAtOccurrence: socAtOccurrence,
-        swapAlertSocThreshold: raiseIssueSocThreshold,
-      });
-
-      // Save custom threshold locally as well
-      const updatedOverrides = { ...batteryThresholdOverrides, [selectedBatteryIdForIssue]: raiseIssueSocThreshold };
-      setBatteryThresholdOverrides(updatedOverrides);
-      localStorage.setItem("bd_ops_battery_soc_threshold_overrides", JSON.stringify(updatedOverrides));
+      }));
 
       if (markAsError) {
         await updateBatteryStatus(selectedBatteryIdForIssue, 3);
         fetchBatteries();
       }
       setIsIssueModalOpen(false);
-      showToast("Issue raised successfully with Swap Alert threshold.");
+      showToast("Issue raised successfully.");
     } catch (err) {
       showToast("Failed to raise issue.");
     } finally {
@@ -2022,12 +2018,23 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
     }
   };
 
-  const resetBatterySocThreshold = (batteryId: string) => {
+  const resetBatterySocThreshold = async (batteryId: string) => {
     const updated = { ...batteryThresholdOverrides };
     delete updated[batteryId];
     setBatteryThresholdOverrides(updated);
     localStorage.setItem("bd_ops_battery_soc_threshold_overrides", JSON.stringify(updated));
-    showToast(`Reset ${batteryId} to global default (${globalSwapSocThreshold}%)`);
+
+    const issue = activeIssuesMap[batteryId];
+    if (issue && issue.id) {
+      try {
+        await updateDoc(doc(db, "battery_issues", issue.id), {
+          swapAlertSocThreshold: null,
+        });
+      } catch (e) {
+        console.warn("Could not update issue in firestore", e);
+      }
+    }
+    showToast(`Reset ${batteryId} to default (${globalSwapSocThreshold}%)`);
   };
 
   const markDriverAsNotified = (
@@ -2925,12 +2932,12 @@ Swap before: ${swapBeforeSoc}%`;
     if (fleetShowBreachedOnly) {
       list = list.filter((item) => {
         const i1 = activeIssuesMap[item.bat1_id];
-        const t1 = i1 ? (batteryThresholdOverrides[item.bat1_id] ?? i1.swapAlertSocThreshold ?? globalSwapSocThreshold) : 0;
-        const b1 = !!i1 && typeof item.bat1_soc === "number" && item.bat1_soc <= t1;
+        const t1 = i1 ? (batteryThresholdOverrides[item.bat1_id] ?? (typeof i1.swapAlertSocThreshold === "number" ? i1.swapAlertSocThreshold : (globalSwapSocThreshold ?? undefined))) : undefined;
+        const b1 = t1 !== undefined && typeof item.bat1_soc === "number" && item.bat1_soc <= t1;
 
         const i2 = item.bat2_id ? activeIssuesMap[item.bat2_id] : undefined;
-        const t2 = i2 ? (batteryThresholdOverrides[item.bat2_id] ?? i2.swapAlertSocThreshold ?? globalSwapSocThreshold) : 0;
-        const b2 = !!i2 && typeof item.bat2_soc === "number" && item.bat2_soc <= t2;
+        const t2 = i2 ? (batteryThresholdOverrides[item.bat2_id] ?? (typeof i2.swapAlertSocThreshold === "number" ? i2.swapAlertSocThreshold : (globalSwapSocThreshold ?? undefined))) : undefined;
+        const b2 = t2 !== undefined && typeof item.bat2_soc === "number" && item.bat2_soc <= t2;
 
         return b1 || b2;
       });
@@ -3012,9 +3019,8 @@ Swap before: ${swapBeforeSoc}%`;
       if (driver.bat1_id && activeIssuesMap[driver.bat1_id]) {
         const issue = activeIssuesMap[driver.bat1_id];
         const threshold = batteryThresholdOverrides[driver.bat1_id] 
-          ?? issue.swapAlertSocThreshold 
-          ?? globalSwapSocThreshold;
-        if (typeof driver.bat1_soc === "number" && driver.bat1_soc <= threshold) {
+          ?? (typeof issue.swapAlertSocThreshold === "number" ? issue.swapAlertSocThreshold : (globalSwapSocThreshold ?? undefined));
+        if (threshold !== undefined && typeof driver.bat1_soc === "number" && driver.bat1_soc <= threshold) {
           breaches.push({
             batteryId: driver.bat1_id,
             iotId: driver.bat1_iot,
@@ -3031,9 +3037,8 @@ Swap before: ${swapBeforeSoc}%`;
       if (driver.bat2_id && activeIssuesMap[driver.bat2_id]) {
         const issue = activeIssuesMap[driver.bat2_id];
         const threshold = batteryThresholdOverrides[driver.bat2_id] 
-          ?? issue.swapAlertSocThreshold 
-          ?? globalSwapSocThreshold;
-        if (typeof driver.bat2_soc === "number" && driver.bat2_soc <= threshold) {
+          ?? (typeof issue.swapAlertSocThreshold === "number" ? issue.swapAlertSocThreshold : (globalSwapSocThreshold ?? undefined));
+        if (threshold !== undefined && typeof driver.bat2_soc === "number" && driver.bat2_soc <= threshold) {
           breaches.push({
             batteryId: driver.bat2_id,
             iotId: driver.bat2_iot,
@@ -3212,10 +3217,16 @@ Swap before: ${swapBeforeSoc}%`;
     const issue1 = activeIssuesMap[item.bat1_id];
     const threshold1 = issue1 ? (batteryThresholdOverrides[item.bat1_id] ?? issue1.swapAlertSocThreshold ?? globalSwapSocThreshold) : 0;
     const isBat1Breached = !!issue1 && typeof item.bat1_soc === "number" && item.bat1_soc <= threshold1;
+    const isSocSet1 = (batteryThresholdOverrides[item.bat1_id] !== undefined && batteryThresholdOverrides[item.bat1_id] !== null)
+      || (typeof issue1?.swapAlertSocThreshold === "number" && !isNaN(issue1.swapAlertSocThreshold));
 
     const issue2 = item.bat2_id ? activeIssuesMap[item.bat2_id] : undefined;
     const threshold2 = issue2 ? (batteryThresholdOverrides[item.bat2_id] ?? issue2.swapAlertSocThreshold ?? globalSwapSocThreshold) : 0;
     const isBat2Breached = !!issue2 && typeof item.bat2_soc === "number" && item.bat2_soc <= threshold2;
+    const isSocSet2 = item.bat2_id
+      ? (batteryThresholdOverrides[item.bat2_id] !== undefined && batteryThresholdOverrides[item.bat2_id] !== null)
+        || (typeof issue2?.swapAlertSocThreshold === "number" && !isNaN(issue2.swapAlertSocThreshold))
+      : false;
 
     const hasAnyBreach = isBat1Breached || isBat2Breached;
     const isNotified = notifiedLogs[`${item.driverId}_${isBat1Breached ? item.bat1_id : item.bat2_id}`] 
@@ -3338,11 +3349,17 @@ Swap before: ${swapBeforeSoc}%`;
                         e.stopPropagation();
                         openSetThresholdModal(item.bat1_id, threshold1, item.bat1_soc, issue1?.mainDescription || "Issue");
                       }}
-                      className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 transition-colors shadow-xs flex items-center gap-1"
-                      title="Set SoC threshold"
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold border transition-colors shadow-xs flex items-center gap-1 ${
+                        isSocSet1
+                          ? "bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800"
+                          : "bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700"
+                      }`}
+                      title={isSocSet1 ? `Current SoC threshold: ≤${threshold1}% (Click to modify)` : "Set SoC threshold"}
                     >
-                      <AdjustmentsHorizontalIcon className="w-3.5 h-3.5 sm:hidden" />
-                      <span className="hidden sm:inline">Set SoC</span>
+                      <AdjustmentsHorizontalIcon className={isSocSet1 ? "w-3 h-3 text-indigo-500 shrink-0" : "w-3.5 h-3.5 sm:hidden"} />
+                      <span className={isSocSet1 ? "inline font-mono font-bold" : "hidden sm:inline"}>
+                        {isSocSet1 ? `≤${threshold1}%` : "Set SoC"}
+                      </span>
                     </button>
                     {isBat1Breached && (
                       <span title={`SoC breached (${item.bat1_soc}% ≤ ${threshold1}%)`}>
@@ -3438,11 +3455,17 @@ Swap before: ${swapBeforeSoc}%`;
                           e.stopPropagation();
                           openSetThresholdModal(item.bat2_id, threshold2, item.bat2_soc, issue2?.mainDescription || "Issue");
                         }}
-                        className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 transition-colors shadow-xs flex items-center gap-1"
-                        title="Set SoC threshold"
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold border transition-colors shadow-xs flex items-center gap-1 ${
+                          isSocSet2
+                            ? "bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800"
+                            : "bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700"
+                        }`}
+                        title={isSocSet2 ? `Current SoC threshold: ≤${threshold2}% (Click to modify)` : "Set SoC threshold"}
                       >
-                        <AdjustmentsHorizontalIcon className="w-3.5 h-3.5 sm:hidden" />
-                        <span className="hidden sm:inline">Set SoC</span>
+                        <AdjustmentsHorizontalIcon className={isSocSet2 ? "w-3 h-3 text-indigo-500 shrink-0" : "w-3.5 h-3.5 sm:hidden"} />
+                        <span className={isSocSet2 ? "inline font-mono font-bold" : "hidden sm:inline"}>
+                          {isSocSet2 ? `≤${threshold2}%` : "Set SoC"}
+                        </span>
                       </button>
                       {isBat2Breached && (
                         <span title={`SoC breached (${item.bat2_soc}% ≤ ${threshold2}%)`}>
@@ -3514,7 +3537,8 @@ Swap before: ${swapBeforeSoc}%`;
             className="w-full pl-12 pr-4 py-3.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl text-sm outline-none focus:ring-4 focus:ring-indigo-50 dark:focus:ring-indigo-900/10 dark:text-zinc-100 font-bold transition-all shadow-sm"
           />
         </div>
-        <div className="flex gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-1 overflow-x-auto scrollbar-hide whitespace-nowrap">
+        <div className="flex gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-1 overflow-x-auto scrollbar-hide whitespace-nowrap items-center justify-between">
+          <div className="flex gap-2 items-center overflow-x-auto scrollbar-hide">
           {[
             {
               id: "ingestion",
@@ -3570,6 +3594,16 @@ Swap before: ${swapBeforeSoc}%`;
               )}
             </button>
           ))}
+          </div>
+
+          <button
+            onClick={() => setShowBulkCreateTicketsModal(true)}
+            className="hidden sm:flex items-center gap-1.5 px-3.5 py-2 mb-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all shrink-0 ml-2"
+            title="Create battery tickets in bulk (paste or upload)"
+          >
+            <TicketIcon className="w-4 h-4" />
+            <span>Bulk Tickets</span>
+          </button>
         </div>
 
         {activeTab === "station_issues" && (
@@ -3644,6 +3678,13 @@ Swap before: ${swapBeforeSoc}%`;
                 />
               </div>
               <div className="flex gap-2 ml-auto w-full md:w-auto">
+                <button
+                  onClick={() => setShowBulkCreateTicketsModal(true)}
+                  className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 shadow-sm transition-all"
+                  title="Create battery tickets in bulk (paste or upload)"
+                >
+                  <TicketIcon className="w-4 h-4" /> Bulk Create Tickets
+                </button>
                 <button
                   onClick={handleBulkMarkError}
                   disabled={isProcessing}
@@ -5550,6 +5591,20 @@ Swap before: ${swapBeforeSoc}%`;
           </div>
         </div>
       )}
+
+      {/* Bulk Create Tickets Modal */}
+      <BulkCreateTicketsModal
+        isOpen={showBulkCreateTicketsModal}
+        onClose={() => setShowBulkCreateTicketsModal(false)}
+        db={db}
+        allBatteries={allBatteries}
+        existingIssues={stationIssues}
+        role={role}
+        onUpdateBatteryStatus={updateBatteryStatus}
+        onSuccess={(count) => {
+          showToast(`Successfully created ${count} battery tickets in bulk!`);
+        }}
+      />
 
       {showGroupModal && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
