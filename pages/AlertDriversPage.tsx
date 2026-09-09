@@ -2055,25 +2055,35 @@ const AlertDriversPage: React.FC<AlertDriversPageProps> = ({
 
   const generateSwapNotificationMessage = (
     driverName: string,
-    batteryId: string,
-    soc: number,
-    threshold: number,
-    issueName: string,
-    stationName: string,
+    driverId: string = "",
+    phone: string = "",
+    soc: number = 0,
+    threshold: number = 35,
+    batteryId: string = "",
+    issueName: string = "",
+    stationName: string = "",
   ) => {
-    const cleanStation = stationName && stationName !== "--" ? stationName : "your nearest Battery Dost Station";
-    return `⚠️ *URGENT BATTERY SWAP ALERT — BATTERY DOST*
+    const cleanDriverName = (driverName || "Driver").trim();
+    const cleanDriverId = (driverId || "--").trim();
+    const rawDigits = (phone || "").replace(/[^0-9]/g, "");
+    const cleanPhone =
+      rawDigits.length === 10
+        ? rawDigits
+        : rawDigits.length > 10
+        ? rawDigits.slice(-10)
+        : (phone || "--").trim();
+    const safeSoc = typeof soc === "number" && !isNaN(soc) ? soc : (parseInt(String(soc), 10) || 0);
+    const safeThreshold = typeof threshold === "number" && !isNaN(threshold) ? threshold : (parseInt(String(threshold), 10) || 35);
+    const swapBeforeSoc = Math.max(0, safeThreshold - 20);
 
-Namaste ${driverName || "Driver"},
+    return `${cleanDriverName}
 
-Your assigned battery *${batteryId}* has an active issue (*${issueName || "Operational Check"}*) and has reached *${soc}% SoC*, which has breached the safe swap limit (*${threshold}%*).
+${cleanDriverId}
 
-📍 *Action Required:*
-Please visit *${cleanStation}* immediately to swap this battery before an unexpected shutdown or vehicle stoppage occurs!
+${cleanPhone}
 
-Station: ${cleanStation}
-Helpline / Ops: Battery Dost
-Stay safe & keep moving!`;
+Current SoC: ${safeSoc}%
+Swap before: ${swapBeforeSoc}%`;
   };
 
   const openNotifyDriverModal = (
@@ -2099,9 +2109,11 @@ Stay safe & keep moving!`;
     setNotificationMessageText(
       generateSwapNotificationMessage(
         driver.driverName,
-        breach.batteryId,
+        driver.driverId,
+        driver.phone,
         breach.currentSoc,
         breach.socThreshold,
+        breach.batteryId,
         breach.issueDescription,
         breach.stationName || driver.stationName || "Hub",
       ),
@@ -5129,9 +5141,11 @@ Stay safe & keep moving!`;
                                       onClick={() => {
                                         const msg = generateSwapNotificationMessage(
                                           driver.driverName,
-                                          primaryBreach.batteryId,
+                                          driver.driverId,
+                                          phone || driver.phone,
                                           primaryBreach.soc,
                                           primaryBreach.threshold,
+                                          primaryBreach.batteryId,
                                           primaryBreach.issue.mainDescription,
                                           driver.stationName || "Hub",
                                         );
@@ -6667,7 +6681,9 @@ Stay safe & keep moving!`;
                 <p className="font-black text-rose-600 dark:text-rose-400">
                   {notificationBreach.currentSoc}% SoC
                 </p>
-                <p className="text-zinc-400 text-[10px]">Safe Limit: ≤{notificationBreach.socThreshold}%</p>
+                <p className="text-zinc-400 text-[10px]">
+                  Safe Limit: ≤{notificationBreach.socThreshold}% • Swap before: ≤{Math.max(0, notificationBreach.socThreshold - 20)}%
+                </p>
               </div>
             </div>
 
@@ -6675,14 +6691,37 @@ Stay safe & keep moving!`;
             <div className="space-y-1.5 flex-1 min-h-0 flex flex-col">
               <label className="text-xs font-bold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider flex items-center justify-between">
                 <span>Alert Message (WhatsApp / SMS)</span>
-                <button
-                  type="button"
-                  onClick={() => copyNotificationMessage(notificationMessageText)}
-                  className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-1 font-bold"
-                >
-                  <DocumentDuplicateIcon className="w-3.5 h-3.5" />
-                  <span>Copy Text</span>
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNotificationMessageText(
+                        generateSwapNotificationMessage(
+                          notificationDriver.driverName,
+                          notificationDriver.driverId,
+                          notificationDriver.phone,
+                          notificationBreach.currentSoc,
+                          notificationBreach.socThreshold,
+                          notificationBreach.batteryId,
+                          notificationBreach.issueDescription,
+                          notificationBreach.stationName,
+                        )
+                      );
+                      showToast("Reset to default message format");
+                    }}
+                    className="text-[11px] text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200 hover:underline font-bold"
+                  >
+                    Reset Format
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => copyNotificationMessage(notificationMessageText)}
+                    className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-1 font-bold"
+                  >
+                    <DocumentDuplicateIcon className="w-3.5 h-3.5" />
+                    <span>Copy Text</span>
+                  </button>
+                </div>
               </label>
               <textarea
                 value={notificationMessageText}
